@@ -1,0 +1,8 @@
+LingDongDao/bin/
+LingDongDao/obj/
+Diagnostics/bin/
+Diagnostics/obj/
+dist/
+.vs/
+*.user
+*.suo

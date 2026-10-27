@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6"/>
+    <Compile Include="..\LingDongDao\StatusMonitor.cs" Link="StatusMonitor.cs"/>
+    <Compile Include="..\LingDongDao\IslandNotice.cs" Link="IslandNotice.cs"/>
+    <Compile Include="..\LingDongDao\AppSettings.cs" Link="AppSettings.cs"/>
+    <Compile Include="..\LingDongDao\ThunderstormForecast.cs" Link="ThunderstormForecast.cs"/>
+    <Compile Include="..\LingDongDao\WeatherMonitor.cs" Link="WeatherMonitor.cs"/>
+  </ItemGroup>
+</Project>
