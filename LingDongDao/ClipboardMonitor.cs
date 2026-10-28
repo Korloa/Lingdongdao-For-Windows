@@ -22,6 +22,7 @@ internal sealed class ClipboardMonitor : IDisposable
     private HwndSource? _source;
     private IntPtr _handle;
     private int _attempts;
+    private DateTime _ignoreUpdatesUntilUtc;
 
     public event Action<IslandNotice>? Copied;
 
@@ -44,6 +45,7 @@ internal sealed class ClipboardMonitor : IDisposable
     {
         if (message == WmClipboardUpdate)
         {
+            if (DateTime.UtcNow < _ignoreUpdatesUntilUtc) return IntPtr.Zero;
             if (!_settings().ClipboardEnabled) return IntPtr.Zero;
             _attempts = 0;
             _retryTimer.Stop();
@@ -57,7 +59,7 @@ internal sealed class ClipboardMonitor : IDisposable
         _attempts++;
         try
         {
-            IslandNotice? notice = ReadCurrent();
+            IslandNotice? notice = ReadCurrent(_settings().ImageConversionEnabled);
             _retryTimer.Stop();
             if (notice is not null) Copied?.Invoke(notice);
         }
@@ -74,14 +76,15 @@ internal sealed class ClipboardMonitor : IDisposable
         }
     }
 
-    private static IslandNotice? ReadCurrent()
+    private static IslandNotice? ReadCurrent(bool conversionEnabled)
     {
         if (Clipboard.ContainsImage())
         {
             BitmapSource? image = Clipboard.GetImage();
             if (image is not null)
                 return new IslandNotice(NoticeKind.ClipboardImage, "已复制图片",
-                    $"{image.PixelWidth} × {image.PixelHeight}", MakeThumbnail(image));
+                    conversionEnabled ? "Ctrl+0 转换格式" : $"{image.PixelWidth} × {image.PixelHeight}",
+                    MakeThumbnail(image));
         }
 
         if (Clipboard.ContainsFileDropList())
@@ -96,7 +99,8 @@ internal sealed class ClipboardMonitor : IDisposable
                 source.UriSource = new Uri(path);
                 source.EndInit();
                 source.Freeze();
-                return new IslandNotice(NoticeKind.ClipboardImage, "已复制图片", Path.GetFileName(path),
+                return new IslandNotice(NoticeKind.ClipboardImage, "已复制图片",
+                    conversionEnabled ? "Ctrl+0 转换格式" : Path.GetFileName(path),
                     MakeThumbnail(source));
             }
         }
@@ -108,6 +112,32 @@ internal sealed class ClipboardMonitor : IDisposable
         if (preview.Length == 0) return null;
         if (preview.Length > 70) preview = preview[..70] + "…";
         return new IslandNotice(NoticeKind.ClipboardText, "已复制文本", preview);
+    }
+
+    public void SuppressNextUpdate() => _ignoreUpdatesUntilUtc = DateTime.UtcNow.AddSeconds(2);
+    public void ClearSuppression() => _ignoreUpdatesUntilUtc = DateTime.MinValue;
+
+    public static BitmapSource? ReadCurrentImage()
+    {
+        if (Clipboard.ContainsImage())
+        {
+            BitmapSource? image = Clipboard.GetImage();
+            if (image is not null) return image;
+        }
+
+        if (!Clipboard.ContainsFileDropList()) return null;
+        foreach (string path in Clipboard.GetFileDropList().Cast<string>())
+        {
+            if (!File.Exists(path) || !ImageExtensions.Contains(Path.GetExtension(path))) continue;
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.UriSource = new Uri(path);
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        return null;
     }
 
     private static BitmapSource MakeThumbnail(BitmapSource image)

@@ -13,7 +13,9 @@ internal enum NoticeKind
     MemoryHigh,
     TemperatureHigh,
     BatteryLow,
-    Thunderstorm
+    Thunderstorm,
+    Music,
+    ImageConverted
 }
 
 internal sealed record IslandNotice(

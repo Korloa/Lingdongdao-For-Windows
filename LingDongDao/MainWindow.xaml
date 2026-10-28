@@ -4,7 +4,7 @@
         Title="灵动岛" Width="360" Height="116"
         WindowStyle="None" AllowsTransparency="True" Background="{x:Null}"
         ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
-        ShowActivated="False" Focusable="False">
+        ShowActivated="False" Focusable="True" PreviewKeyDown="Window_PreviewKeyDown">
     <Grid>
         <Border x:Name="Island"
                 Width="58" Height="4"
@@ -44,6 +44,26 @@
                                    FontSize="11" Foreground="#A8AFBB" Margin="0,3,0,0"
                                    TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
+                    <Grid x:Name="FormatPicker" Grid.Column="1" Margin="8,0,0,0"
+                          VerticalAlignment="Center" Visibility="Collapsed" Focusable="True"
+                          PreviewMouseWheel="Picker_PreviewMouseWheel">
+                        <Grid.RenderTransform><TranslateTransform x:Name="PickerShift"/></Grid.RenderTransform>
+                        <StackPanel>
+                            <TextBlock x:Name="PickerHint" Text="选择格式 · A/D 或滚轮" FontFamily="Microsoft YaHei UI"
+                                       FontSize="10" Foreground="#A8AFBB" Margin="2,0,0,4"/>
+                            <UniformGrid Columns="3">
+                                <Button x:Name="PreviousFormat" Height="27" Margin="1,0" Padding="0"
+                                        Background="#202631" Foreground="#A8AFBB" BorderThickness="0"
+                                        FontSize="11" FontWeight="SemiBold" Click="FormatButton_Click"/>
+                                <Button x:Name="CurrentFormat" Height="27" Margin="1,0" Padding="0"
+                                        Background="#253B38" Foreground="#55E9AB" BorderBrush="#55E9AB"
+                                        BorderThickness="1" FontSize="11" FontWeight="Bold" Click="FormatButton_Click"/>
+                                <Button x:Name="NextFormat" Height="27" Margin="1,0" Padding="0"
+                                        Background="#202631" Foreground="#A8AFBB" BorderThickness="0"
+                                        FontSize="11" FontWeight="SemiBold" Click="FormatButton_Click"/>
+                            </UniformGrid>
+                        </StackPanel>
+                    </Grid>
                     <Grid x:Name="BatteryIndicator" Grid.Column="2" Width="28" Height="16"
                           VerticalAlignment="Center" Margin="6,0,0,0" Visibility="Collapsed">
                         <Border Width="24" Height="15" HorizontalAlignment="Left" CornerRadius="3"

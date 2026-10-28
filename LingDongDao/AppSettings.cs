@@ -33,6 +33,8 @@ internal sealed class AppSettings
 
     public bool ChargingEnabled { get; set; } = true;
     public bool ClipboardEnabled { get; set; } = true;
+    public bool MusicEnabled { get; set; } = true;
+    public bool ImageConversionEnabled { get; set; } = true;
     public bool WifiConnectedEnabled { get; set; } = true;
     public bool WifiSlowEnabled { get; set; } = true;
     public bool NoInternetEnabled { get; set; } = true;

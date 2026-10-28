@@ -5,7 +5,9 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Windows.Input;
 using Forms = System.Windows.Forms;
 using DrawingColor = System.Drawing.Color;
 using MediaColor = System.Windows.Media.Color;
@@ -15,6 +17,7 @@ namespace LingDongDao;
 public partial class MainWindow : Window
 {
     private const int HotkeyId = 0x11D0;
+    private const int ConvertHotkeyId = 0x11D1;
     private const int WmHotkey = 0x0312;
 
     private AppSettings _settings;
@@ -24,6 +27,7 @@ public partial class MainWindow : Window
     private readonly ClipboardMonitor _clipboardMonitor;
     private readonly StatusMonitor _statusMonitor;
     private readonly WeatherMonitor _weatherMonitor;
+    private readonly MusicMonitor _musicMonitor;
     private readonly DispatcherTimer _closeTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
     private readonly Forms.NotifyIcon _trayIcon;
     private bool _isOpen;
@@ -32,6 +36,14 @@ public partial class MainWindow : Window
     private HwndSource? _hotkeySource;
     private IntPtr _hotkeyHandle;
     private string? _registeredHotkey;
+    private IslandNotice? _musicNotice;
+    private bool _isPersistentMusicNotice;
+    private BitmapSource? _pickerImage;
+    private bool _pickerOpen;
+    private bool _convertHotkeyRegistered;
+    private int _pickerIndex = 1;
+    private IntPtr _focusBeforePicker;
+    private DateTime _ignoreIslandClickUntilUtc;
 
     public MainWindow(bool previewOnStart)
     {
@@ -58,7 +70,11 @@ public partial class MainWindow : Window
         _weatherMonitor = new WeatherMonitor(() => _settings);
         _weatherMonitor.Notice += ShowNotice;
         _weatherMonitor.Start();
-        _closeTimer.Tick += (_, _) => Collapse();
+        _musicMonitor = new MusicMonitor(() => _settings);
+        _musicMonitor.Playing += OnMusicPlaying;
+        _musicMonitor.Stopped += OnMusicStopped;
+        _musicMonitor.Start();
+        _closeTimer.Tick += (_, _) => EndTemporaryNotice();
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开控制面板", null, (_, _) => Dispatcher.Invoke(OpenSettings));
@@ -77,10 +93,13 @@ public partial class MainWindow : Window
                 "剩余 15% · 请连接电源", BatteryPercent: 15))));
         preview.DropDownItems.Add("郫都区雷雨", null, (_, _) => Dispatcher.Invoke(() =>
             ShowNotice(new IslandNotice(NoticeKind.Thunderstorm, "未来可能有雷雨", "郫都区 · 明天 16:00 左右"))));
+        preview.DropDownItems.Add("音乐卡片", null, (_, _) => Dispatcher.Invoke(() =>
+            ShowNotice(new IslandNotice(NoticeKind.Music, "示例歌曲", "网易云音乐 · 示例歌手"))));
         menu.Items.Add(preview);
         menu.Items.Add("查看检测状态", null, (_, _) => Dispatcher.Invoke(() =>
             Forms.MessageBox.Show(_statusMonitor.GetStatusSummary() +
-                $"\n郫都区雷雨预报：{_weatherMonitor.StatusText}", "灵动岛检测状态")));
+                $"\n郫都区雷雨预报：{_weatherMonitor.StatusText}" +
+                $"\n音乐会话：{_musicMonitor.StatusText}", "灵动岛检测状态")));
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("退出灵动岛", null, (_, _) => Dispatcher.Invoke(Close));
         _trayIcon = new Forms.NotifyIcon
@@ -100,6 +119,12 @@ public partial class MainWindow : Window
             {
                 _trayIcon.BalloonTipTitle = "灵动岛快捷键不可用";
                 _trayIcon.BalloonTipText = "快捷键被占用，请从托盘打开控制面板修改。";
+                _trayIcon.ShowBalloonTip(5000);
+            }
+            if (!TrySetConversionHotkey(_settings.ImageConversionEnabled, out _))
+            {
+                _trayIcon.BalloonTipTitle = "图片转换快捷键不可用";
+                _trayIcon.BalloonTipText = "Ctrl+0 已被占用，无法打开图片格式选择。";
                 _trayIcon.ShowBalloonTip(5000);
             }
         };
@@ -135,9 +160,17 @@ public partial class MainWindow : Window
             TrySetHotkey(oldHotkey, out _);
             return error;
         }
+        bool conversionChanged = candidate.ImageConversionEnabled != _settings.ImageConversionEnabled;
+        if (conversionChanged && !TrySetConversionHotkey(candidate.ImageConversionEnabled, out error))
+        {
+            if (startupChanged) StartupManager.TrySetEnabled(_settings.StartWithWindows, out _);
+            TrySetHotkey(oldHotkey, out _);
+            return error;
+        }
         try { SettingsStore.Save(candidate); }
         catch (Exception exception)
         {
+            if (conversionChanged) TrySetConversionHotkey(_settings.ImageConversionEnabled, out _);
             if (startupChanged) StartupManager.TrySetEnabled(_settings.StartWithWindows, out _);
             TrySetHotkey(oldHotkey, out _);
             return $"保存设置失败：{exception.Message}";
@@ -146,11 +179,15 @@ public partial class MainWindow : Window
         bool batteryChanged = candidate.BatteryLowEnabled != _settings.BatteryLowEnabled ||
                               candidate.BatteryLowPercent != _settings.BatteryLowPercent;
         _settings = candidate;
+        if (!_settings.ImageConversionEnabled && _pickerOpen) ClosePicker();
         _previewSettings = null;
         ApplyVisualSettings();
         if (batteryChanged) _powerMonitor.RefreshSettings();
         _statusMonitor.RefreshSettings();
         _weatherMonitor.RefreshSettings();
+        _musicMonitor.RefreshSettings();
+        if (candidate.DisplayMode == IslandDisplayMode.Automatic && _musicNotice is not null && !_pickerOpen)
+            ShowNoticeCore(_musicNotice, false);
         return null;
     }
 
@@ -167,11 +204,20 @@ public partial class MainWindow : Window
     {
         _previewSettings = null;
         ApplyVisualSettings();
+        if (_musicNotice is not null && CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic && !_pickerOpen)
+            ShowNoticeCore(_musicNotice, false);
     }
 
     private void ApplyVisualSettings()
     {
         AppSettings visual = CurrentVisualSettings;
+        if (visual.DisplayMode != IslandDisplayMode.Automatic && _pickerOpen)
+        {
+            _pickerOpen = false;
+            _pickerImage = null;
+            FormatPicker.Visibility = Visibility.Collapsed;
+            ContentText.Visibility = Visibility.Visible;
+        }
         bool modeChanged = _renderedMode != visual.DisplayMode;
         _renderedMode = visual.DisplayMode;
         Width = Math.Max(360, visual.IslandWidth + 40);
@@ -214,7 +260,7 @@ public partial class MainWindow : Window
                 Animate(Island, HeightProperty, visual.IslandHeight);
                 AnimateColor(IslandBrush, ExpandedBackground(visual));
                 _closeTimer.Stop();
-                _closeTimer.Start();
+                if (!_pickerOpen && !_isPersistentMusicNotice) _closeTimer.Start();
             }
             else
             {
@@ -232,6 +278,11 @@ public partial class MainWindow : Window
         if (message == WmHotkey && wParam.ToInt32() == HotkeyId)
         {
             OpenSettings();
+            handled = true;
+        }
+        else if (message == WmHotkey && wParam.ToInt32() == ConvertHotkeyId)
+        {
+            OpenFormatPicker();
             handled = true;
         }
         return IntPtr.Zero;
@@ -266,11 +317,36 @@ public partial class MainWindow : Window
         return false;
     }
 
+    private bool TrySetConversionHotkey(bool enabled, out string? error)
+    {
+        error = null;
+        if (enabled == _convertHotkeyRegistered) return true;
+        if (!enabled)
+        {
+            UnregisterHotKey(_hotkeyHandle, ConvertHotkeyId);
+            _convertHotkeyRegistered = false;
+            return true;
+        }
+        if (RegisterHotKey(_hotkeyHandle, ConvertHotkeyId, 0x4000 | 0x0002, 0x30))
+        {
+            _convertHotkeyRegistered = true;
+            return true;
+        }
+        error = "Ctrl+0 已被其他程序占用，无法启用图片转换快捷键。";
+        return false;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(IntPtr handle, int id, uint modifiers, uint virtualKey);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UnregisterHotKey(IntPtr handle, int id);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr handle);
 
     private void PositionAtTop()
     {
@@ -301,6 +377,7 @@ public partial class MainWindow : Window
 
     private void Island_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
+        if (_pickerOpen || DateTime.UtcNow < _ignoreIslandClickUntilUtc) return;
         ShowCharging(_powerMonitor.Current);
     }
 
@@ -311,12 +388,171 @@ public partial class MainWindow : Window
             BatteryPercent: power.Percent));
     }
 
+    private void OnMusicPlaying(MusicSnapshot snapshot)
+    {
+        string detail = string.IsNullOrEmpty(snapshot.Artist)
+            ? snapshot.PlayerName : $"{snapshot.PlayerName} · {snapshot.Artist}";
+        _musicNotice = new IslandNotice(NoticeKind.Music, snapshot.Title, detail);
+        if (!_pickerOpen && (!_isOpen || _currentKind == NoticeKind.Music))
+            ShowNoticeCore(_musicNotice, false);
+    }
+
+    private void OnMusicStopped()
+    {
+        _musicNotice = null;
+        if (_currentKind == NoticeKind.Music && !_pickerOpen) Collapse();
+    }
+
+    private void EndTemporaryNotice()
+    {
+        if (_pickerOpen) return;
+        if (_musicNotice is not null && CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
+            ShowNoticeCore(_musicNotice, false);
+        else Collapse();
+    }
+
+    private void OpenFormatPicker()
+    {
+        if (!_settings.ImageConversionEnabled || CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic)
+            return;
+        try
+        {
+            BitmapSource? image = ClipboardMonitor.ReadCurrentImage();
+            if (image is null)
+            {
+                ShowNotice(new IslandNotice(NoticeKind.ClipboardImage, "先复制图片", "然后按 Ctrl+0 选择格式"));
+                return;
+            }
+
+            if (!_pickerOpen) _focusBeforePicker = GetForegroundWindow();
+            _pickerOpen = false;
+            _pickerImage = image;
+            _pickerIndex = 1;
+            ShowNoticeCore(new IslandNotice(NoticeKind.ClipboardImage, "转换图片", "选择格式", image), true);
+            _pickerOpen = true;
+            ContentText.Visibility = Visibility.Collapsed;
+            FormatPicker.Visibility = Visibility.Visible;
+            PickerHint.Text = "选择格式 · A/D 或滚轮";
+            UpdateFormatPicker(0);
+            _closeTimer.Stop();
+            Activate();
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_pickerOpen) CurrentFormat.Focus();
+            }), DispatcherPriority.Input);
+        }
+        catch (Exception exception)
+        {
+            _pickerOpen = false;
+            _pickerImage = null;
+            ShowNotice(new IslandNotice(NoticeKind.ClipboardImage, "无法读取图片", exception.Message));
+        }
+    }
+
+    private void UpdateFormatPicker(int direction)
+    {
+        int count = ClipboardImageConverter.Formats.Length;
+        int previous = (_pickerIndex - 1 + count) % count;
+        int next = (_pickerIndex + 1) % count;
+        PreviousFormat.Tag = previous;
+        PreviousFormat.Content = ClipboardImageConverter.Formats[previous];
+        CurrentFormat.Tag = _pickerIndex;
+        CurrentFormat.Content = ClipboardImageConverter.Formats[_pickerIndex];
+        NextFormat.Tag = next;
+        NextFormat.Content = ClipboardImageConverter.Formats[next];
+        if (direction != 0)
+            PickerShift.BeginAnimation(TranslateTransform.XProperty,
+                new DoubleAnimation(direction > 0 ? 18 : -18, 0, TimeSpan.FromMilliseconds(170))
+                { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+    }
+
+    private void MoveFormat(int direction)
+    {
+        int count = ClipboardImageConverter.Formats.Length;
+        _pickerIndex = (_pickerIndex + direction + count) % count;
+        UpdateFormatPicker(direction);
+    }
+
+    private void Picker_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!_pickerOpen) return;
+        MoveFormat(e.Delta < 0 ? 1 : -1);
+        e.Handled = true;
+    }
+
+    private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (!_pickerOpen) return;
+        switch (e.Key)
+        {
+            case Key.A or Key.Left:
+                MoveFormat(-1);
+                e.Handled = true;
+                break;
+            case Key.D or Key.Right:
+                MoveFormat(1);
+                e.Handled = true;
+                break;
+            case Key.Enter:
+                ConvertSelectedFormat(_pickerIndex);
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                ClosePicker();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void FormatButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_pickerOpen || sender is not System.Windows.Controls.Button button || button.Tag is not int index)
+            return;
+        ConvertSelectedFormat(index);
+    }
+
+    private void ConvertSelectedFormat(int index)
+    {
+        if (!_pickerOpen || _pickerImage is null) return;
+        string format = ClipboardImageConverter.Formats[index];
+        try
+        {
+            _ignoreIslandClickUntilUtc = DateTime.UtcNow.AddMilliseconds(500);
+            ClipboardImageConverter.ConvertAndCopy(_pickerImage, format,
+                _clipboardMonitor.SuppressNextUpdate);
+            ClosePicker(showPrevious: false);
+            ShowNoticeCore(new IslandNotice(NoticeKind.ImageConverted,
+                $"{format} 复制成功", $"已转换为 {format} · 可粘贴"), false);
+        }
+        catch (Exception exception)
+        {
+            _clipboardMonitor.ClearSuppression();
+            PickerHint.Text = $"转换失败：{exception.Message}";
+        }
+    }
+
+    private void ClosePicker(bool showPrevious = true)
+    {
+        _pickerOpen = false;
+        _pickerImage = null;
+        FormatPicker.Visibility = Visibility.Collapsed;
+        ContentText.Visibility = Visibility.Visible;
+        if (_focusBeforePicker != IntPtr.Zero && _focusBeforePicker != _hotkeyHandle)
+            SetForegroundWindow(_focusBeforePicker);
+        _focusBeforePicker = IntPtr.Zero;
+        if (showPrevious) EndTemporaryNotice();
+    }
+
     private void ShowNotice(IslandNotice notice) => ShowNoticeCore(notice, false);
 
     private void ShowNoticeCore(IslandNotice notice, bool preview)
     {
+        if (_pickerOpen && !preview) return;
         if (!preview && CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
         _closeTimer.Stop();
+        _isPersistentMusicNotice = ReferenceEquals(notice, _musicNotice);
+        ContentText.Visibility = Visibility.Visible;
+        FormatPicker.Visibility = Visibility.Collapsed;
         _currentKind = notice.Kind;
         TitleText.Text = notice.Title;
         DetailText.Text = notice.Detail;
@@ -341,7 +577,7 @@ public partial class MainWindow : Window
             AnimateShadow(0.46);
             Animate(ExpandedContent, OpacityProperty, 1);
         }
-        if (!preview)
+        if (!preview && !_isPersistentMusicNotice)
         {
             _closeTimer.Interval = TimeSpan.FromSeconds(CurrentVisualSettings.NoticeSeconds);
             _closeTimer.Start();
@@ -350,10 +586,12 @@ public partial class MainWindow : Window
 
     private void Collapse()
     {
+        if (_pickerOpen) return;
         _closeTimer.Stop();
         if (!_isOpen) return;
         _isOpen = false;
         _currentKind = null;
+        _isPersistentMusicNotice = false;
         Animate(Island, WidthProperty, CurrentVisualSettings.LineWidth);
         Animate(Island, HeightProperty, CurrentVisualSettings.LineThickness);
         AnimateColor(IslandBrush, MediaColor.FromRgb(168, 175, 187));
@@ -370,6 +608,8 @@ public partial class MainWindow : Window
             NoticeKind.ClipboardText or NoticeKind.ClipboardImage => MediaColor.FromRgb(128, 184, 255),
             NoticeKind.WifiConnected => MediaColor.FromRgb(103, 219, 244),
             NoticeKind.Thunderstorm => MediaColor.FromRgb(165, 160, 255),
+            NoticeKind.Music => MediaColor.FromRgb(255, 119, 148),
+            NoticeKind.ImageConverted => MediaColor.FromRgb(84, 244, 176),
             _ => MediaColor.FromRgb(255, 187, 88)
         };
         if (kind == NoticeKind.BatteryLow) accent = MediaColor.FromRgb(255, 174, 88);
@@ -384,6 +624,8 @@ public partial class MainWindow : Window
                 "M 1,8 C 7,2 17,2 23,8 L 21,10 C 16,5 8,5 3,10 Z M 5,12 C 9,8 15,8 19,12 L 17,14 C 14,11 10,11 7,14 Z M 9,17 C 11,15 13,15 15,17 L 12,21 Z",
             NoticeKind.Thunderstorm =>
                 "M 6,15 C 3,15 2,13 2,11 C 2,8 4,6 7,6 C 8,3 11,2 14,3 C 17,3 19,5 19,8 C 22,8 23,10 23,12 C 23,14 21,15 19,15 H 14 L 10,21 L 11,16 H 8 L 7,20 L 6,15 Z",
+            NoticeKind.Music => "M 10,3 V 16 C 8,15 5,16 5,19 C 5,21 7,22 9,21 C 11,20 12,18 12,16 V 7 L 20,5 V 13 C 18,12 15,13 15,16 C 15,18 17,19 19,18 C 21,17 22,15 22,13 V 2 Z",
+            NoticeKind.ImageConverted => "M 4,4 H 20 V 20 H 4 Z M 7,16 L 11,12 L 14,15 L 17,10 L 20,15 V 20 H 4 Z",
             _ => "M 10,2 H 14 L 13,15 H 11 Z M 10,18 H 14 V 22 H 10 Z"
         });
     }
@@ -422,11 +664,13 @@ public partial class MainWindow : Window
     {
         _closeTimer.Stop();
         if (_registeredHotkey is not null) UnregisterHotKey(_hotkeyHandle, HotkeyId);
+        if (_convertHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, ConvertHotkeyId);
         _hotkeySource?.RemoveHook(HotkeyWndProc);
         _settingsWindow?.Close();
         _clipboardMonitor.Dispose();
         _statusMonitor.Dispose();
         _weatherMonitor.Dispose();
+        _musicMonitor.Dispose();
         _powerMonitor.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Icon?.Dispose();

@@ -154,6 +154,8 @@
                             <CheckBox Content="接入电源" IsChecked="{Binding ChargingEnabled}"/>
                             <CheckBox Content="低电量" IsChecked="{Binding BatteryLowEnabled}"/>
                             <CheckBox Content="复制内容预览" IsChecked="{Binding ClipboardEnabled}"/>
+                            <CheckBox Content="音乐卡片（网易云／酷狗）" IsChecked="{Binding MusicEnabled}"/>
+                            <CheckBox Content="图片格式转换（Ctrl+0）" IsChecked="{Binding ImageConversionEnabled}"/>
                             <CheckBox Content="Wi‑Fi 连接" IsChecked="{Binding WifiConnectedEnabled}"/>
                             <CheckBox Content="Wi‑Fi 低速" IsChecked="{Binding WifiSlowEnabled}"/>
                             <CheckBox Content="无法访问网络" IsChecked="{Binding NoInternetEnabled}"/>
@@ -161,6 +163,8 @@
                             <CheckBox Content="温度过高" IsChecked="{Binding TemperatureEnabled}"/>
                             <CheckBox Content="郫都区未来雷雨" IsChecked="{Binding WeatherEnabled}"/>
                         </UniformGrid>
+                        <TextBlock Text="音乐卡片需要播放器向 Windows 提供媒体会话；图片转换会把文件保存到本地。"
+                                   Foreground="#929BAA" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
                     </StackPanel>
                 </Border>
 

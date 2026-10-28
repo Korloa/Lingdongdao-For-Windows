@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -14,5 +14,7 @@
     <Compile Include="..\LingDongDao\AppSettings.cs" Link="AppSettings.cs"/>
     <Compile Include="..\LingDongDao\ThunderstormForecast.cs" Link="ThunderstormForecast.cs"/>
     <Compile Include="..\LingDongDao\WeatherMonitor.cs" Link="WeatherMonitor.cs"/>
+    <Compile Include="..\LingDongDao\ClipboardImageConverter.cs" Link="ClipboardImageConverter.cs"/>
+    <Compile Include="..\LingDongDao\MusicMonitor.cs" Link="MusicMonitor.cs"/>
   </ItemGroup>
 </Project>
