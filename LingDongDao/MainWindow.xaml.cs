@@ -461,9 +461,17 @@ public partial class MainWindow : Window
         NextFormat.Tag = next;
         NextFormat.Content = ClipboardImageConverter.Formats[next];
         if (direction != 0)
-            PickerShift.BeginAnimation(TranslateTransform.XProperty,
-                new DoubleAnimation(direction > 0 ? 18 : -18, 0, TimeSpan.FromMilliseconds(170))
-                { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+        {
+            var duration = TimeSpan.FromMilliseconds(160);
+            var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+            FormatShift.BeginAnimation(TranslateTransform.XProperty,
+                new DoubleAnimation(direction > 0 ? 12 : -12, 0, duration)
+                { EasingFunction = easing });
+            CurrentFormatScale.BeginAnimation(ScaleTransform.ScaleXProperty,
+                new DoubleAnimation(0.9, 1, duration) { EasingFunction = easing });
+            CurrentFormatScale.BeginAnimation(ScaleTransform.ScaleYProperty,
+                new DoubleAnimation(0.9, 1, duration) { EasingFunction = easing });
+        }
     }
 
     private void MoveFormat(int direction)
