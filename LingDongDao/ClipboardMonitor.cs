@@ -84,7 +84,7 @@ internal sealed class ClipboardMonitor : IDisposable
             if (image is not null)
                 return new IslandNotice(NoticeKind.ClipboardImage, "已复制图片",
                     conversionEnabled ? "Ctrl+0 转换格式" : $"{image.PixelWidth} × {image.PixelHeight}",
-                    MakeThumbnail(image));
+                    MakeThumbnail(image), FullImage: image);
         }
 
         if (Clipboard.ContainsFileDropList())
@@ -101,7 +101,7 @@ internal sealed class ClipboardMonitor : IDisposable
                 source.Freeze();
                 return new IslandNotice(NoticeKind.ClipboardImage, "已复制图片",
                     conversionEnabled ? "Ctrl+0 转换格式" : Path.GetFileName(path),
-                    MakeThumbnail(source));
+                    MakeThumbnail(source), ImagePath: path);
             }
         }
 

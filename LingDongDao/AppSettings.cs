@@ -35,6 +35,9 @@ internal sealed class AppSettings
     public bool ClipboardEnabled { get; set; } = true;
     public bool MusicEnabled { get; set; } = true;
     public bool ImageConversionEnabled { get; set; } = true;
+    public bool HoverExpandEnabled { get; set; } = true;
+    public double ImageCornerRadius { get; set; } = 8;
+    public double ImagePreviewSize { get; set; } = 260;
     public int FormatVisibleItems { get; set; } = 5;
     public double FormatItemWidth { get; set; } = 36;
     public double FormatSpacing { get; set; } = 4;
@@ -74,6 +77,8 @@ internal sealed class AppSettings
         AnimationMilliseconds = Math.Clamp(AnimationMilliseconds, 120, 700);
         TopOffset = Math.Clamp(TopOffset, 0, 20);
         NoticeSeconds = Math.Clamp(NoticeSeconds, 1.5, 10);
+        ImageCornerRadius = Math.Clamp(ImageCornerRadius, 0, 24);
+        ImagePreviewSize = Math.Clamp(ImagePreviewSize, 140, 420);
         FormatVisibleItems = FormatVisibleItems <= 3 ? 3 : 5;
         FormatItemWidth = Math.Clamp(FormatItemWidth, 32, 52);
         FormatSpacing = Math.Clamp(FormatSpacing, 0, 14);

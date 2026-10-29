@@ -86,6 +86,9 @@
                         </UniformGrid>
                         <TextBlock Text="保持展开可边调外观边看效果；自动切换时收到提醒才展开。"
                                    Foreground="#929BAA" FontSize="11" TextWrapping="Wrap"/>
+                        <CheckBox x:Name="HoverExpandCheck" Content="鼠标贴近空闲短线时自动展开"
+                                  IsChecked="{Binding HoverExpandEnabled}"
+                                  Checked="Appearance_Changed" Unchecked="Appearance_Changed"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource Panel}">
@@ -170,6 +173,20 @@
                         <local:SettingSlider x:Name="FormatScrollSlider" Label="横向滚动时长" Unit="ms"
                                              Minimum="100" Maximum="600" Step="10"
                                              Value="{Binding FormatScrollMilliseconds, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Panel}">
+                    <StackPanel>
+                        <TextBlock Text="图片缩略图与悬浮预览" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock Text="缩略图默认是稍带圆角的方形；悬浮时在灵动岛下方查看大图。"
+                                   Foreground="#929BAA" FontSize="11" Margin="0,0,0,12"/>
+                        <local:SettingSlider x:Name="ImageCornerRadiusSlider" Label="缩略图圆角半径" Unit="px"
+                                             Minimum="0" Maximum="24" Step="1"
+                                             Value="{Binding ImageCornerRadius, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                        <local:SettingSlider x:Name="ImagePreviewSizeSlider" Label="悬浮大图最大边长" Unit="px"
+                                             Minimum="140" Maximum="420" Step="10"
+                                             Value="{Binding ImagePreviewSize, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
                     </StackPanel>
                 </Border>
 

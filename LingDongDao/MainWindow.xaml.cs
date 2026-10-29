@@ -10,6 +10,7 @@ using System.Windows.Threading;
 using System.Windows.Input;
 using Button = System.Windows.Controls.Button;
 using Canvas = System.Windows.Controls.Canvas;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using Forms = System.Windows.Forms;
 using DrawingColor = System.Drawing.Color;
 using MediaColor = System.Windows.Media.Color;
@@ -31,6 +32,7 @@ public partial class MainWindow : Window
     private readonly WeatherMonitor _weatherMonitor;
     private readonly MusicMonitor _musicMonitor;
     private readonly DispatcherTimer _closeTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
+    private readonly DispatcherTimer _imageHoverCloseTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private readonly Forms.NotifyIcon _trayIcon;
     private bool _isOpen;
     private NoticeKind? _currentKind;
@@ -41,15 +43,17 @@ public partial class MainWindow : Window
     private IslandNotice? _musicNotice;
     private bool _isPersistentMusicNotice;
     private BitmapSource? _pickerImage;
+    private BitmapSource? _imagePreviewSource;
+    private string? _imagePreviewPath;
+    private bool _hoverExpanded;
     private bool _pickerOpen;
     private bool _convertHotkeyRegistered;
     private int _pickerIndex = 1;
-    private readonly Queue<int> _pendingFormatMoves = new();
     private Button[] _formatButtons = [];
     private double _formatStep;
     private double _formatRestX;
     private bool _formatMoving;
-    private bool _convertWhenSettled;
+    private bool _convertAfterMove;
     private int _formatAnimationToken;
     private IntPtr _focusBeforePicker;
     private DateTime _ignoreIslandClickUntilUtc;
@@ -59,6 +63,7 @@ public partial class MainWindow : Window
         _settings = SettingsStore.Load();
         _settings.StartWithWindows = StartupManager.IsEnabledForCurrentExecutable();
         InitializeComponent();
+        ImageHoverPopup.PlacementTarget = Island;
         CreateFormatButtons();
         ApplyVisualSettings();
         _powerMonitor = new PowerMonitor(() => _settings);
@@ -85,6 +90,14 @@ public partial class MainWindow : Window
         _musicMonitor.Stopped += OnMusicStopped;
         _musicMonitor.Start();
         _closeTimer.Tick += (_, _) => EndTemporaryNotice();
+        _imageHoverCloseTimer.Tick += (_, _) =>
+        {
+            if (PreviewImageFrame.IsMouseOver || ImageHoverPanel.IsMouseOver) return;
+            HideImagePreview();
+            if (_isOpen && !_pickerOpen && !_isPersistentMusicNotice &&
+                CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
+                _closeTimer.Start();
+        };
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开控制面板", null, (_, _) => Dispatcher.Invoke(OpenSettings));
@@ -238,13 +251,22 @@ public partial class MainWindow : Window
         Island.CornerRadius = new CornerRadius(visual.CornerRadius);
         ExpandedContent.Margin = new Thickness(visual.HorizontalPadding, 0, visual.HorizontalPadding, 0);
         IconColumn.Width = new GridLength(visual.IconSize + 6);
-        IconBadge.Width = IconBadge.Height = PreviewCircle.Width = PreviewCircle.Height = visual.IconSize;
+        IconBadge.Width = IconBadge.Height = PreviewImageFrame.Width = PreviewImageFrame.Height = visual.IconSize;
         IconBadge.CornerRadius = new CornerRadius(visual.IconSize / 2);
+        PreviewImageFrame.Tag = new CornerRadius(Math.Min(visual.ImageCornerRadius, visual.IconSize / 2));
+        IdleHoverTarget.Width = visual.LineWidth + 18;
+        IdleHoverTarget.Height = Math.Max(18, visual.LineThickness + 12);
+        IdleHoverTarget.Margin = new Thickness(0, Math.Max(0, visual.TopOffset - 4), 0, 0);
         NoticeIcon.Width = NoticeIcon.Height = visual.IconSize * 0.52;
         TitleText.FontSize = visual.TitleFontSize;
         DetailText.FontSize = visual.DetailFontSize;
         UpdateFormatCarouselLayout();
         _closeTimer.Interval = TimeSpan.FromSeconds(visual.NoticeSeconds);
+        if (_hoverExpanded && !visual.HoverExpandEnabled) Collapse();
+        IdleHoverTarget.Visibility = visual.DisplayMode == IslandDisplayMode.Automatic &&
+                                     visual.HoverExpandEnabled && !_isOpen
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (ImageHoverPopup.IsOpen) LayoutImageHoverPreview();
 
         if (visual.DisplayMode == IslandDisplayMode.Hidden)
         {
@@ -392,6 +414,108 @@ public partial class MainWindow : Window
     {
         if (_pickerOpen || DateTime.UtcNow < _ignoreIslandClickUntilUtc) return;
         ShowCharging(_powerMonitor.Current);
+    }
+
+    private void IdleHoverTarget_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (_isOpen || _pickerOpen || !CurrentVisualSettings.HoverExpandEnabled ||
+            CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
+
+        PowerSnapshot power = _powerMonitor.Current;
+        IslandNotice notice = power.HasBattery
+            ? new IslandNotice(NoticeKind.Charging,
+                power.IsPluggedIn ? "正在充电" : "电池状态",
+                power.Percent is int percent ? $"当前电量 {percent}%" : "电量暂不可用",
+                BatteryPercent: power.Percent)
+            : new IslandNotice(NoticeKind.Idle, "灵动岛", "Ctrl+Alt+D 打开控制面板");
+        ShowNoticeCore(notice, true);
+        _hoverExpanded = true;
+    }
+
+    private void IdleHoverTarget_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_pickerOpen) ShowCharging(_powerMonitor.Current);
+    }
+
+    private void Island_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_hoverExpanded && !_pickerOpen) Collapse();
+    }
+
+    private void PreviewImageFrame_MouseEnter(object sender, MouseEventArgs e)
+    {
+        OpenImagePreview();
+    }
+
+    private void PreviewImageFrame_Click(object sender, RoutedEventArgs e)
+    {
+        OpenImagePreview();
+        e.Handled = true;
+    }
+
+    private void OpenImagePreview()
+    {
+        if (!_isOpen || PreviewImageFrame.Visibility != Visibility.Visible) return;
+        _imageHoverCloseTimer.Stop();
+        try
+        {
+            if (_imagePreviewPath is not null && _imagePreviewSource is null)
+            {
+                var image = new BitmapImage();
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.DecodePixelWidth = (int)Math.Round(CurrentVisualSettings.ImagePreviewSize * 2);
+                image.UriSource = new Uri(_imagePreviewPath);
+                image.EndInit();
+                image.Freeze();
+                _imagePreviewSource = image;
+            }
+            _imagePreviewSource ??= PreviewImageBrush.ImageSource as BitmapSource;
+            if (_imagePreviewSource is null) return;
+            ImageHoverFull.Source = _imagePreviewSource;
+            LayoutImageHoverPreview();
+            ImageHoverPopup.IsOpen = true;
+            _closeTimer.Stop();
+        }
+        catch (Exception)
+        {
+            _imagePreviewSource = PreviewImageBrush.ImageSource as BitmapSource;
+            if (_imagePreviewSource is null) return;
+            ImageHoverFull.Source = _imagePreviewSource;
+            LayoutImageHoverPreview();
+            ImageHoverPopup.IsOpen = true;
+            _closeTimer.Stop();
+        }
+    }
+
+    private void PreviewImageFrame_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (ImageHoverPopup.IsOpen) _imageHoverCloseTimer.Start();
+    }
+
+    private void ImageHoverPanel_MouseEnter(object sender, MouseEventArgs e) => _imageHoverCloseTimer.Stop();
+
+    private void ImageHoverPanel_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (ImageHoverPopup.IsOpen) _imageHoverCloseTimer.Start();
+    }
+
+    private void LayoutImageHoverPreview()
+    {
+        if (_imagePreviewSource is null) return;
+        double maxSide = CurrentVisualSettings.ImagePreviewSize;
+        double scale = Math.Min(maxSide / _imagePreviewSource.PixelWidth,
+                                maxSide / _imagePreviewSource.PixelHeight);
+        ImageHoverFull.Width = Math.Max(1, Math.Round(_imagePreviewSource.PixelWidth * scale));
+        ImageHoverFull.Height = Math.Max(1, Math.Round(_imagePreviewSource.PixelHeight * scale));
+        ImageHoverPopup.HorizontalOffset = (Island.ActualWidth - ImageHoverFull.Width - 20) / 2;
+    }
+
+    private void HideImagePreview()
+    {
+        _imageHoverCloseTimer.Stop();
+        ImageHoverPopup.IsOpen = false;
+        ImageHoverFull.Source = null;
     }
 
     private void ShowCharging(PowerSnapshot power)
@@ -548,40 +672,24 @@ public partial class MainWindow : Window
     {
         _formatAnimationToken++;
         _formatMoving = false;
-        _convertWhenSettled = false;
-        _pendingFormatMoves.Clear();
+        _convertAfterMove = false;
         FormatShift.BeginAnimation(TranslateTransform.XProperty, null);
     }
 
     private void MoveFormat(int direction)
     {
-        if (!_pickerOpen || _pendingFormatMoves.Count >= 12) return;
-        _pendingFormatMoves.Enqueue(direction);
-        StartNextFormatMove();
+        if (!_pickerOpen || _formatMoving) return;
+        StartFormatMove(direction);
     }
 
-    private void StartNextFormatMove()
+    private void StartFormatMove(int direction)
     {
-        if (!_pickerOpen || _formatMoving) return;
-        if (_pendingFormatMoves.Count == 0)
-        {
-            if (_convertWhenSettled)
-            {
-                _convertWhenSettled = false;
-                ConvertSelectedFormat(_pickerIndex);
-            }
-            return;
-        }
-
-        int direction = _pendingFormatMoves.Dequeue();
         _formatMoving = true;
         int token = ++_formatAnimationToken;
         TimeSpan duration = TimeSpan.FromMilliseconds(CurrentVisualSettings.FormatScrollMilliseconds);
-        var easing = new CubicEase { EasingMode = EasingMode.EaseInOut };
-        AnimateFormatEmphasis(_formatButtons[3], false, duration, easing);
-        AnimateFormatEmphasis(_formatButtons[3 + direction], true, duration, easing);
-        var scroll = new DoubleAnimation(_formatRestX, _formatRestX - direction * _formatStep, duration)
-        { EasingFunction = easing };
+        AnimateFormatEmphasis(_formatButtons[3], false, duration);
+        AnimateFormatEmphasis(_formatButtons[3 + direction], true, duration);
+        var scroll = new DoubleAnimation(_formatRestX, _formatRestX - direction * _formatStep, duration);
         scroll.Completed += (_, _) =>
         {
             if (!_pickerOpen || token != _formatAnimationToken) return;
@@ -590,21 +698,24 @@ public partial class MainWindow : Window
             _formatMoving = false;
             RenderFormatButtons();
             SetFormatRestPosition();
-            StartNextFormatMove();
+            if (_convertAfterMove)
+            {
+                _convertAfterMove = false;
+                ConvertSelectedFormat(_pickerIndex);
+            }
         };
         FormatShift.BeginAnimation(TranslateTransform.XProperty, scroll);
     }
 
-    private void AnimateFormatEmphasis(Button button, bool selected, TimeSpan duration, IEasingFunction easing)
+    private void AnimateFormatEmphasis(Button button, bool selected, TimeSpan duration)
     {
         double fontSize = selected
             ? CurrentVisualSettings.FormatSelectedFontSize : CurrentVisualSettings.FormatFontSize;
         button.BeginAnimation(Button.FontSizeProperty,
-            new DoubleAnimation(fontSize, duration) { EasingFunction = easing });
+            new DoubleAnimation(fontSize, duration));
         ((SolidColorBrush)button.Foreground).BeginAnimation(SolidColorBrush.ColorProperty,
             new ColorAnimation(selected ? MediaColor.FromRgb(85, 233, 171)
-                                        : MediaColor.FromRgb(168, 175, 187), duration)
-            { EasingFunction = easing });
+                                        : MediaColor.FromRgb(168, 175, 187), duration));
     }
 
     private void Picker_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -628,7 +739,7 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case Key.Enter:
-                if (_formatMoving || _pendingFormatMoves.Count > 0) _convertWhenSettled = true;
+                if (_formatMoving) _convertAfterMove = true;
                 else ConvertSelectedFormat(_pickerIndex);
                 e.Handled = true;
                 break;
@@ -685,7 +796,9 @@ public partial class MainWindow : Window
     {
         if (_pickerOpen && !preview) return;
         if (!preview && CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
+        HideImagePreview();
         _closeTimer.Stop();
+        _hoverExpanded = false;
         _isPersistentMusicNotice = ReferenceEquals(notice, _musicNotice);
         ContentText.Visibility = Visibility.Visible;
         FormatPicker.Visibility = Visibility.Collapsed;
@@ -694,8 +807,11 @@ public partial class MainWindow : Window
         DetailText.Text = notice.Detail;
         bool isImage = notice.Image is not null;
         IconBadge.Visibility = isImage ? Visibility.Collapsed : Visibility.Visible;
-        PreviewCircle.Visibility = isImage ? Visibility.Visible : Visibility.Collapsed;
-        PreviewCircle.Fill = isImage ? new ImageBrush(notice.Image) { Stretch = Stretch.UniformToFill } : null;
+        PreviewImageFrame.Visibility = isImage ? Visibility.Visible : Visibility.Collapsed;
+        PreviewImageBrush.ImageSource = notice.Image;
+        _imagePreviewSource = notice.FullImage ?? (notice.ImagePath is null ? notice.Image : null);
+        _imagePreviewPath = notice.ImagePath;
+        IdleHoverTarget.Visibility = Visibility.Collapsed;
         BatteryIndicator.Visibility = notice.Kind is NoticeKind.Charging or NoticeKind.BatteryLow
             ? Visibility.Visible : Visibility.Collapsed;
         BatteryFill.Width = notice.BatteryPercent is int value
@@ -724,10 +840,17 @@ public partial class MainWindow : Window
     {
         if (_pickerOpen) return;
         _closeTimer.Stop();
+        HideImagePreview();
         if (!_isOpen) return;
         _isOpen = false;
         _currentKind = null;
+        _hoverExpanded = false;
+        _imagePreviewSource = null;
+        _imagePreviewPath = null;
         _isPersistentMusicNotice = false;
+        IdleHoverTarget.Visibility = CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic &&
+                                     CurrentVisualSettings.HoverExpandEnabled
+            ? Visibility.Visible : Visibility.Collapsed;
         Animate(Island, WidthProperty, CurrentVisualSettings.LineWidth);
         Animate(Island, HeightProperty, CurrentVisualSettings.LineThickness);
         AnimateColor(IslandBrush, MediaColor.FromRgb(168, 175, 187));
@@ -740,6 +863,7 @@ public partial class MainWindow : Window
     {
         MediaColor accent = kind switch
         {
+            NoticeKind.Idle => MediaColor.FromRgb(128, 184, 255),
             NoticeKind.Charging or NoticeKind.BatteryLow => MediaColor.FromRgb(84, 244, 176),
             NoticeKind.ClipboardText or NoticeKind.ClipboardImage => MediaColor.FromRgb(128, 184, 255),
             NoticeKind.WifiConnected => MediaColor.FromRgb(103, 219, 244),
@@ -753,6 +877,7 @@ public partial class MainWindow : Window
         IconBadge.Background = new SolidColorBrush(MediaColor.FromArgb(28, accent.R, accent.G, accent.B));
         NoticeIcon.Data = Geometry.Parse(kind switch
         {
+            NoticeKind.Idle => "M 5,9 C 5,6 7,5 10,5 H 14 C 17,5 19,6 19,9 V 15 C 19,18 17,19 14,19 H 10 C 7,19 5,18 5,15 Z",
             NoticeKind.Charging or NoticeKind.BatteryLow => "M 13,2 L 5,13 L 11,13 L 9,22 L 20,9 L 14,9 Z",
             NoticeKind.ClipboardText or NoticeKind.ClipboardImage =>
                 "M 8,3 H 10 C 10,1 14,1 14,3 H 16 V 6 H 8 Z M 6,5 H 7 V 7 H 17 V 5 H 18 C 19,5 20,6 20,7 V 20 C 20,21 19,22 18,22 H 6 C 5,22 4,21 4,20 V 7 C 4,6 5,5 6,5 Z",

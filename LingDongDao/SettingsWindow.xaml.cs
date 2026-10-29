@@ -42,6 +42,9 @@ public partial class SettingsWindow : Window
         OpacitySlider.SetCurrentValue(SettingSlider.ValueProperty, _working.BackgroundOpacityPercent);
         AnimationSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.AnimationMilliseconds);
         DurationSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.NoticeSeconds);
+        HoverExpandCheck.IsChecked = _working.HoverExpandEnabled;
+        ImageCornerRadiusSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.ImageCornerRadius);
+        ImagePreviewSizeSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.ImagePreviewSize);
         FormatVisibleItemsSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)_working.FormatVisibleItems);
         FormatItemWidthSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.FormatItemWidth);
         FormatSpacingSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.FormatSpacing);
@@ -87,6 +90,9 @@ public partial class SettingsWindow : Window
         _working.BackgroundOpacityPercent = OpacitySlider.Value;
         _working.AnimationMilliseconds = AnimationSlider.Value;
         _working.NoticeSeconds = DurationSlider.Value;
+        _working.HoverExpandEnabled = HoverExpandCheck.IsChecked == true;
+        _working.ImageCornerRadius = ImageCornerRadiusSlider.Value;
+        _working.ImagePreviewSize = ImagePreviewSizeSlider.Value;
         _working.FormatVisibleItems = (int)FormatVisibleItemsSlider.Value;
         _working.FormatItemWidth = FormatItemWidthSlider.Value;
         _working.FormatSpacing = FormatSpacingSlider.Value;

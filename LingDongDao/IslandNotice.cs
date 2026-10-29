@@ -4,6 +4,7 @@ namespace LingDongDao;
 
 internal enum NoticeKind
 {
+    Idle,
     Charging,
     ClipboardText,
     ClipboardImage,
@@ -23,4 +24,6 @@ internal sealed record IslandNotice(
     string Title,
     string Detail,
     BitmapSource? Image = null,
-    int? BatteryPercent = null);
+    int? BatteryPercent = null,
+    BitmapSource? FullImage = null,
+    string? ImagePath = null);

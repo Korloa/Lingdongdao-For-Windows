@@ -11,6 +11,8 @@
                 HorizontalAlignment="Center" VerticalAlignment="Top"
                 Margin="0,1,0,0"
                 CornerRadius="24" BorderThickness="1"
+                MouseEnter="IdleHoverTarget_MouseEnter"
+                MouseLeave="Island_MouseLeave"
                 MouseLeftButtonUp="Island_MouseLeftButtonUp">
             <Border.Background>
                 <SolidColorBrush x:Name="IslandBrush" Color="#A8AFBB"/>
@@ -34,8 +36,21 @@
                               Fill="#54F4B0" Stretch="Uniform" Width="23" Height="23"
                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
-                    <Ellipse x:Name="PreviewCircle" Width="44" Height="44" VerticalAlignment="Center"
-                             Visibility="Collapsed"/>
+                    <Button x:Name="PreviewImageFrame" Width="44" Height="44"
+                            VerticalAlignment="Center" Visibility="Collapsed" Focusable="False" Cursor="Hand"
+                            AutomationProperties.Name="图片缩略图"
+                            MouseEnter="PreviewImageFrame_MouseEnter"
+                            MouseLeave="PreviewImageFrame_MouseLeave" Click="PreviewImageFrame_Click">
+                        <Button.Background>
+                            <ImageBrush x:Name="PreviewImageBrush" Stretch="UniformToFill"/>
+                        </Button.Background>
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}"
+                                        CornerRadius="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
                     <StackPanel x:Name="ContentText" Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
                         <TextBlock x:Name="TitleText" Text="正在充电" FontFamily="Microsoft YaHei UI"
                                    FontSize="15" FontWeight="SemiBold" Foreground="#F7F8FA"
@@ -92,5 +107,25 @@
                 </Grid>
             </Grid>
         </Border>
+        <Button x:Name="IdleHoverTarget" Width="76" Height="18"
+                HorizontalAlignment="Center" VerticalAlignment="Top" Background="#01000000"
+                Focusable="False" AutomationProperties.Name="空闲短线感应区"
+                MouseEnter="IdleHoverTarget_MouseEnter" Click="IdleHoverTarget_Click">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"/>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
+        <Popup x:Name="ImageHoverPopup" Placement="Bottom" PlacementTarget="{Binding ElementName=Island}"
+               VerticalOffset="8" AllowsTransparency="True" StaysOpen="True" Focusable="False">
+            <Border x:Name="ImageHoverPanel" Padding="9" CornerRadius="14"
+                    Background="#F1090B11" BorderBrush="#667D8DA5" BorderThickness="1"
+                    AutomationProperties.Name="图片悬浮预览"
+                    MouseEnter="ImageHoverPanel_MouseEnter" MouseLeave="ImageHoverPanel_MouseLeave">
+                <Image x:Name="ImageHoverFull" Stretch="Uniform" Width="260" Height="260"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
+            </Border>
+        </Popup>
     </Grid>
 </Window>
