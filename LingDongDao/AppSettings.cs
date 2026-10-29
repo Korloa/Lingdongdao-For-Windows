@@ -35,6 +35,12 @@ internal sealed class AppSettings
     public bool ClipboardEnabled { get; set; } = true;
     public bool MusicEnabled { get; set; } = true;
     public bool ImageConversionEnabled { get; set; } = true;
+    public int FormatVisibleItems { get; set; } = 5;
+    public double FormatItemWidth { get; set; } = 36;
+    public double FormatSpacing { get; set; } = 4;
+    public double FormatFontSize { get; set; } = 12;
+    public double FormatSelectedFontSize { get; set; } = 14;
+    public double FormatScrollMilliseconds { get; set; } = 230;
     public bool WifiConnectedEnabled { get; set; } = true;
     public bool WifiSlowEnabled { get; set; } = true;
     public bool NoInternetEnabled { get; set; } = true;
@@ -68,6 +74,12 @@ internal sealed class AppSettings
         AnimationMilliseconds = Math.Clamp(AnimationMilliseconds, 120, 700);
         TopOffset = Math.Clamp(TopOffset, 0, 20);
         NoticeSeconds = Math.Clamp(NoticeSeconds, 1.5, 10);
+        FormatVisibleItems = FormatVisibleItems <= 3 ? 3 : 5;
+        FormatItemWidth = Math.Clamp(FormatItemWidth, 32, 52);
+        FormatSpacing = Math.Clamp(FormatSpacing, 0, 14);
+        FormatFontSize = Math.Clamp(FormatFontSize, 10, 16);
+        FormatSelectedFontSize = Math.Clamp(FormatSelectedFontSize, FormatFontSize, 20);
+        FormatScrollMilliseconds = Math.Clamp(FormatScrollMilliseconds, 100, 600);
         WifiSlowMbps = Math.Clamp(WifiSlowMbps, 5, 100);
         MemoryPercent = Math.Clamp(MemoryPercent, 60, 98);
         CpuTemperatureC = Math.Clamp(CpuTemperatureC, 70, 105);

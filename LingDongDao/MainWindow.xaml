@@ -46,7 +46,7 @@
                     </StackPanel>
                     <Grid x:Name="FormatPicker" Grid.Column="1" Margin="8,0,0,0"
                           VerticalAlignment="Center" Visibility="Collapsed" Focusable="True"
-                          Background="Transparent"
+                          Background="Transparent" ClipToBounds="True"
                           PreviewMouseWheel="Picker_PreviewMouseWheel">
                         <Grid.Resources>
                             <Style x:Key="FormatTextButton" TargetType="Button">
@@ -71,21 +71,13 @@
                         <StackPanel>
                             <TextBlock x:Name="PickerHint" Text="选择格式 · A/D 或滚轮" FontFamily="Microsoft YaHei UI"
                                        FontSize="10" Foreground="#A8AFBB" Margin="2,0,0,4"/>
-                            <UniformGrid x:Name="FormatRow" Columns="3" Background="Transparent">
-                                <UniformGrid.RenderTransform><TranslateTransform x:Name="FormatShift"/></UniformGrid.RenderTransform>
-                                <Button x:Name="PreviousFormat" Height="27" Margin="1,0"
-                                        Style="{StaticResource FormatTextButton}" FontFamily="Microsoft YaHei UI"
-                                        Foreground="#A8AFBB" FontSize="12" Click="FormatButton_Click"/>
-                                <Button x:Name="CurrentFormat" Height="27" Margin="1,0"
-                                        Style="{StaticResource FormatTextButton}" FontFamily="Microsoft YaHei UI"
-                                        Foreground="#55E9AB" FontSize="14" FontWeight="SemiBold"
-                                        RenderTransformOrigin="0.5,0.5" Click="FormatButton_Click">
-                                    <Button.RenderTransform><ScaleTransform x:Name="CurrentFormatScale"/></Button.RenderTransform>
-                                </Button>
-                                <Button x:Name="NextFormat" Height="27" Margin="1,0"
-                                        Style="{StaticResource FormatTextButton}" FontFamily="Microsoft YaHei UI"
-                                        Foreground="#A8AFBB" FontSize="12" Click="FormatButton_Click"/>
-                            </UniformGrid>
+                            <Grid x:Name="FormatViewport" Width="200" Height="27"
+                                  HorizontalAlignment="Center" Background="Transparent"
+                                  ClipToBounds="True" SizeChanged="FormatViewport_SizeChanged">
+                                <Canvas x:Name="FormatTrack" Width="280" Height="27" HorizontalAlignment="Left">
+                                    <Canvas.RenderTransform><TranslateTransform x:Name="FormatShift"/></Canvas.RenderTransform>
+                                </Canvas>
+                            </Grid>
                         </StackPanel>
                     </Grid>
                     <Grid x:Name="BatteryIndicator" Grid.Column="2" Width="28" Height="16"

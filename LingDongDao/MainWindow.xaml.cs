@@ -8,6 +8,8 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Windows.Input;
+using Button = System.Windows.Controls.Button;
+using Canvas = System.Windows.Controls.Canvas;
 using Forms = System.Windows.Forms;
 using DrawingColor = System.Drawing.Color;
 using MediaColor = System.Windows.Media.Color;
@@ -42,6 +44,13 @@ public partial class MainWindow : Window
     private bool _pickerOpen;
     private bool _convertHotkeyRegistered;
     private int _pickerIndex = 1;
+    private readonly Queue<int> _pendingFormatMoves = new();
+    private Button[] _formatButtons = [];
+    private double _formatStep;
+    private double _formatRestX;
+    private bool _formatMoving;
+    private bool _convertWhenSettled;
+    private int _formatAnimationToken;
     private IntPtr _focusBeforePicker;
     private DateTime _ignoreIslandClickUntilUtc;
 
@@ -50,6 +59,7 @@ public partial class MainWindow : Window
         _settings = SettingsStore.Load();
         _settings.StartWithWindows = StartupManager.IsEnabledForCurrentExecutable();
         InitializeComponent();
+        CreateFormatButtons();
         ApplyVisualSettings();
         _powerMonitor = new PowerMonitor(() => _settings);
         _powerMonitor.PluggedIn += power =>
@@ -213,8 +223,10 @@ public partial class MainWindow : Window
         AppSettings visual = CurrentVisualSettings;
         if (visual.DisplayMode != IslandDisplayMode.Automatic && _pickerOpen)
         {
+            CancelFormatMovement();
             _pickerOpen = false;
             _pickerImage = null;
+            _focusBeforePicker = IntPtr.Zero;
             FormatPicker.Visibility = Visibility.Collapsed;
             ContentText.Visibility = Visibility.Visible;
         }
@@ -231,6 +243,7 @@ public partial class MainWindow : Window
         NoticeIcon.Width = NoticeIcon.Height = visual.IconSize * 0.52;
         TitleText.FontSize = visual.TitleFontSize;
         DetailText.FontSize = visual.DetailFontSize;
+        UpdateFormatCarouselLayout();
         _closeTimer.Interval = TimeSpan.FromSeconds(visual.NoticeSeconds);
 
         if (visual.DisplayMode == IslandDisplayMode.Hidden)
@@ -425,6 +438,7 @@ public partial class MainWindow : Window
             }
 
             if (!_pickerOpen) _focusBeforePicker = GetForegroundWindow();
+            CancelFormatMovement();
             _pickerOpen = false;
             _pickerImage = image;
             _pickerIndex = 1;
@@ -433,12 +447,13 @@ public partial class MainWindow : Window
             ContentText.Visibility = Visibility.Collapsed;
             FormatPicker.Visibility = Visibility.Visible;
             PickerHint.Text = "选择格式 · A/D 或滚轮";
-            UpdateFormatPicker(0);
+            RenderFormatButtons();
+            SetFormatRestPosition();
             _closeTimer.Stop();
             Activate();
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (_pickerOpen) CurrentFormat.Focus();
+                if (_pickerOpen) _formatButtons[3].Focus();
             }), DispatcherPriority.Input);
         }
         catch (Exception exception)
@@ -449,36 +464,147 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateFormatPicker(int direction)
+    private void CreateFormatButtons()
     {
-        int count = ClipboardImageConverter.Formats.Length;
-        int previous = (_pickerIndex - 1 + count) % count;
-        int next = (_pickerIndex + 1) % count;
-        PreviousFormat.Tag = previous;
-        PreviousFormat.Content = ClipboardImageConverter.Formats[previous];
-        CurrentFormat.Tag = _pickerIndex;
-        CurrentFormat.Content = ClipboardImageConverter.Formats[_pickerIndex];
-        NextFormat.Tag = next;
-        NextFormat.Content = ClipboardImageConverter.Formats[next];
-        if (direction != 0)
+        var style = (Style)FormatPicker.FindResource("FormatTextButton");
+        _formatButtons = new Button[7];
+        for (int slot = 0; slot < _formatButtons.Length; slot++)
         {
-            var duration = TimeSpan.FromMilliseconds(160);
-            var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
-            FormatShift.BeginAnimation(TranslateTransform.XProperty,
-                new DoubleAnimation(direction > 0 ? 12 : -12, 0, duration)
-                { EasingFunction = easing });
-            CurrentFormatScale.BeginAnimation(ScaleTransform.ScaleXProperty,
-                new DoubleAnimation(0.9, 1, duration) { EasingFunction = easing });
-            CurrentFormatScale.BeginAnimation(ScaleTransform.ScaleYProperty,
-                new DoubleAnimation(0.9, 1, duration) { EasingFunction = easing });
+            var button = new Button
+            {
+                Style = style,
+                Height = 27,
+                FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI"),
+                Foreground = new SolidColorBrush()
+            };
+            button.Click += FormatButton_Click;
+            FormatTrack.Children.Add(button);
+            _formatButtons[slot] = button;
         }
+    }
+
+    private void UpdateFormatCarouselLayout()
+    {
+        CancelFormatMovement();
+        AppSettings visual = CurrentVisualSettings;
+        _formatStep = visual.FormatItemWidth + visual.FormatSpacing;
+        FormatViewport.Width = visual.FormatVisibleItems * _formatStep;
+        FormatTrack.Width = _formatButtons.Length * _formatStep;
+        for (int slot = 0; slot < _formatButtons.Length; slot++)
+        {
+            Button button = _formatButtons[slot];
+            button.Width = visual.FormatItemWidth;
+            button.FontSize = visual.FormatFontSize;
+            Canvas.SetLeft(button, slot * _formatStep);
+            Canvas.SetTop(button, 0);
+        }
+        RenderFormatButtons();
+        SetFormatRestPosition();
+    }
+
+    private void RenderFormatButtons()
+    {
+        if (_formatButtons.Length == 0) return;
+        AppSettings visual = CurrentVisualSettings;
+        int count = ClipboardImageConverter.Formats.Length;
+        for (int slot = 0; slot < _formatButtons.Length; slot++)
+        {
+            Button button = _formatButtons[slot];
+            int index = (_pickerIndex + slot - 3 + count * 2) % count;
+            bool selected = slot == 3;
+            button.Tag = index;
+            button.Content = ClipboardImageConverter.Formats[index];
+            button.FontWeight = FontWeights.Normal;
+            button.BeginAnimation(Button.FontSizeProperty, null);
+            button.FontSize = selected ? visual.FormatSelectedFontSize : visual.FormatFontSize;
+            var brush = (SolidColorBrush)button.Foreground;
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            brush.Color = selected ? MediaColor.FromRgb(85, 233, 171)
+                                   : MediaColor.FromRgb(168, 175, 187);
+        }
+    }
+
+    private void FormatViewport_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_formatMoving)
+        {
+            CancelFormatMovement();
+            RenderFormatButtons();
+        }
+        SetFormatRestPosition();
+    }
+
+    private void SetFormatRestPosition()
+    {
+        if (_formatMoving || _formatStep <= 0) return;
+        double viewportWidth = FormatViewport.ActualWidth > 0
+            ? FormatViewport.ActualWidth : FormatViewport.Width;
+        _formatRestX = viewportWidth / 2 - (3 * _formatStep + CurrentVisualSettings.FormatItemWidth / 2);
+        FormatShift.BeginAnimation(TranslateTransform.XProperty, null);
+        FormatShift.X = _formatRestX;
+    }
+
+    private void CancelFormatMovement()
+    {
+        _formatAnimationToken++;
+        _formatMoving = false;
+        _convertWhenSettled = false;
+        _pendingFormatMoves.Clear();
+        FormatShift.BeginAnimation(TranslateTransform.XProperty, null);
     }
 
     private void MoveFormat(int direction)
     {
-        int count = ClipboardImageConverter.Formats.Length;
-        _pickerIndex = (_pickerIndex + direction + count) % count;
-        UpdateFormatPicker(direction);
+        if (!_pickerOpen || _pendingFormatMoves.Count >= 12) return;
+        _pendingFormatMoves.Enqueue(direction);
+        StartNextFormatMove();
+    }
+
+    private void StartNextFormatMove()
+    {
+        if (!_pickerOpen || _formatMoving) return;
+        if (_pendingFormatMoves.Count == 0)
+        {
+            if (_convertWhenSettled)
+            {
+                _convertWhenSettled = false;
+                ConvertSelectedFormat(_pickerIndex);
+            }
+            return;
+        }
+
+        int direction = _pendingFormatMoves.Dequeue();
+        _formatMoving = true;
+        int token = ++_formatAnimationToken;
+        TimeSpan duration = TimeSpan.FromMilliseconds(CurrentVisualSettings.FormatScrollMilliseconds);
+        var easing = new CubicEase { EasingMode = EasingMode.EaseInOut };
+        AnimateFormatEmphasis(_formatButtons[3], false, duration, easing);
+        AnimateFormatEmphasis(_formatButtons[3 + direction], true, duration, easing);
+        var scroll = new DoubleAnimation(_formatRestX, _formatRestX - direction * _formatStep, duration)
+        { EasingFunction = easing };
+        scroll.Completed += (_, _) =>
+        {
+            if (!_pickerOpen || token != _formatAnimationToken) return;
+            int count = ClipboardImageConverter.Formats.Length;
+            _pickerIndex = (_pickerIndex + direction + count) % count;
+            _formatMoving = false;
+            RenderFormatButtons();
+            SetFormatRestPosition();
+            StartNextFormatMove();
+        };
+        FormatShift.BeginAnimation(TranslateTransform.XProperty, scroll);
+    }
+
+    private void AnimateFormatEmphasis(Button button, bool selected, TimeSpan duration, IEasingFunction easing)
+    {
+        double fontSize = selected
+            ? CurrentVisualSettings.FormatSelectedFontSize : CurrentVisualSettings.FormatFontSize;
+        button.BeginAnimation(Button.FontSizeProperty,
+            new DoubleAnimation(fontSize, duration) { EasingFunction = easing });
+        ((SolidColorBrush)button.Foreground).BeginAnimation(SolidColorBrush.ColorProperty,
+            new ColorAnimation(selected ? MediaColor.FromRgb(85, 233, 171)
+                                        : MediaColor.FromRgb(168, 175, 187), duration)
+            { EasingFunction = easing });
     }
 
     private void Picker_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -502,7 +628,8 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case Key.Enter:
-                ConvertSelectedFormat(_pickerIndex);
+                if (_formatMoving || _pendingFormatMoves.Count > 0) _convertWhenSettled = true;
+                else ConvertSelectedFormat(_pickerIndex);
                 e.Handled = true;
                 break;
             case Key.Escape:
@@ -514,7 +641,7 @@ public partial class MainWindow : Window
 
     private void FormatButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_pickerOpen || sender is not System.Windows.Controls.Button button || button.Tag is not int index)
+        if (!_pickerOpen || _formatMoving || sender is not Button button || button.Tag is not int index)
             return;
         ConvertSelectedFormat(index);
     }
@@ -541,6 +668,7 @@ public partial class MainWindow : Window
 
     private void ClosePicker(bool showPrevious = true)
     {
+        CancelFormatMovement();
         _pickerOpen = false;
         _pickerImage = null;
         FormatPicker.Visibility = Visibility.Collapsed;

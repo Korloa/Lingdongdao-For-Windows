@@ -42,6 +42,12 @@ public partial class SettingsWindow : Window
         OpacitySlider.SetCurrentValue(SettingSlider.ValueProperty, _working.BackgroundOpacityPercent);
         AnimationSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.AnimationMilliseconds);
         DurationSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.NoticeSeconds);
+        FormatVisibleItemsSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)_working.FormatVisibleItems);
+        FormatItemWidthSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.FormatItemWidth);
+        FormatSpacingSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.FormatSpacing);
+        FormatFontSizeSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.FormatFontSize);
+        FormatSelectedFontSizeSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.FormatSelectedFontSize);
+        FormatScrollSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.FormatScrollMilliseconds);
         WeatherHoursSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)_working.WeatherLookaheadHours);
     }
 
@@ -81,6 +87,12 @@ public partial class SettingsWindow : Window
         _working.BackgroundOpacityPercent = OpacitySlider.Value;
         _working.AnimationMilliseconds = AnimationSlider.Value;
         _working.NoticeSeconds = DurationSlider.Value;
+        _working.FormatVisibleItems = (int)FormatVisibleItemsSlider.Value;
+        _working.FormatItemWidth = FormatItemWidthSlider.Value;
+        _working.FormatSpacing = FormatSpacingSlider.Value;
+        _working.FormatFontSize = FormatFontSizeSlider.Value;
+        _working.FormatSelectedFontSize = FormatSelectedFontSizeSlider.Value;
+        _working.FormatScrollMilliseconds = FormatScrollSlider.Value;
         _preview(_working.Clone());
     }
 

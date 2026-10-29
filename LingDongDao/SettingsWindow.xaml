@@ -149,6 +149,32 @@
 
                 <Border Style="{StaticResource Panel}">
                     <StackPanel>
+                        <TextBlock Text="图片格式选择条" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock Text="默认并排显示五项；超出岛内可视范围的文字会隐藏。"
+                                   Foreground="#929BAA" FontSize="11" Margin="0,0,0,12"/>
+                        <local:SettingSlider x:Name="FormatVisibleItemsSlider" Label="可视格式数量" Unit="项"
+                                             Minimum="3" Maximum="5" Step="2"
+                                             Value="{Binding FormatVisibleItems, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                        <local:SettingSlider x:Name="FormatItemWidthSlider" Label="每项文字宽度" Unit="px"
+                                             Minimum="32" Maximum="52" Step="1"
+                                             Value="{Binding FormatItemWidth, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                        <local:SettingSlider x:Name="FormatSpacingSlider" Label="文字间距" Unit="px"
+                                             Minimum="0" Maximum="14" Step="1"
+                                             Value="{Binding FormatSpacing, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                        <local:SettingSlider x:Name="FormatFontSizeSlider" Label="普通文字字号" Unit="px"
+                                             Minimum="10" Maximum="16" Step="0.5" Decimals="1"
+                                             Value="{Binding FormatFontSize, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                        <local:SettingSlider x:Name="FormatSelectedFontSizeSlider" Label="选中文字字号" Unit="px"
+                                             Minimum="12" Maximum="20" Step="0.5" Decimals="1"
+                                             Value="{Binding FormatSelectedFontSize, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                        <local:SettingSlider x:Name="FormatScrollSlider" Label="横向滚动时长" Unit="ms"
+                                             Minimum="100" Maximum="600" Step="10"
+                                             Value="{Binding FormatScrollMilliseconds, Mode=OneWay}" ValueChanged="Appearance_Changed"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Panel}">
+                    <StackPanel>
                         <TextBlock Text="提醒开关" Style="{StaticResource PanelTitle}"/>
                         <UniformGrid Columns="2">
                             <CheckBox Content="接入电源" IsChecked="{Binding ChargingEnabled}"/>
