@@ -156,7 +156,7 @@ public partial class MainWindow : Window
         menu.Items.Add("查看检测状态", null, (_, _) => Dispatcher.Invoke(() =>
             Forms.MessageBox.Show(_statusMonitor.GetStatusSummary() +
                 $"\n郫都区雷雨预报：{_weatherMonitor.StatusText}" +
-                $"\n音乐会话：{_musicMonitor.StatusText}", "灵动岛检测状态")));
+                $"\n音乐：{_musicMonitor.StatusText}", "灵动岛检测状态")));
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("退出灵动岛", null, (_, _) => Dispatcher.Invoke(Close));
         _trayIcon = new Forms.NotifyIcon

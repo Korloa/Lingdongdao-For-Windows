@@ -174,6 +174,60 @@ internal static class Program
             app.Run();
             return;
         }
+        if (args.Contains("--music-sessions"))
+        {
+            Task.Run(async () =>
+            {
+                var manager = await Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+                var sessions = manager.GetSessions();
+                Console.WriteLine($"系统媒体会话数：{sessions.Count}");
+                foreach (var session in sessions)
+                {
+                    var info = session.GetPlaybackInfo();
+                    var media = await session.TryGetMediaPropertiesAsync();
+                    Console.WriteLine($"来源={session.SourceAppUserModelId} 状态={info?.PlaybackStatus} 歌名={media?.Title} 歌手={media?.Artist}");
+                }
+            }).GetAwaiter().GetResult();
+            return;
+        }
+        if (args.Contains("--music-fallback-live"))
+        {
+            var reader = new MusicFallbackReader();
+            MusicSnapshot? snapshot = Task.Run(reader.Read).GetAwaiter().GetResult();
+            Console.WriteLine($"本地播放器：{reader.StatusText}");
+            Console.WriteLine($"卡片：{(snapshot is null ? "无" : snapshot.PlayerName + " · " + snapshot.Title)}");
+            return;
+        }
+        if (args.Contains("--netease-probe"))
+        {
+            var reader = new NetEasePlaybackReader();
+            MusicSnapshot? snapshot = Task.Run(reader.Read).GetAwaiter().GetResult();
+            Console.WriteLine($"网易云：{reader.StatusText}");
+            Console.WriteLine($"进程状态：{reader.ProbeDetails}");
+            Console.WriteLine($"卡片：{(snapshot is null ? "无" : snapshot.Title)}");
+            return;
+        }
+        if (args.Contains("--audio-probe"))
+        {
+            var audible = Task.Run(MusicFallbackReader.AudibleProcessIds).GetAwaiter().GetResult();
+            Console.WriteLine($"正在发声的进程数：{audible.Count}");
+            return;
+        }
+        if (args.Contains("--music-self-test"))
+        {
+            var track = MusicFallbackReader.ParseKugouTitle("歌手 - 歌名 - 酷狗音乐");
+            if (track != ("歌手", "歌名") ||
+                MusicFallbackReader.ParseKugouTitle("酷狗音乐") is not null ||
+                MusicFallbackReader.ParseKugouTitle("别的播放器") is not null)
+                throw new Exception("酷狗窗口标题识别错误");
+            byte[] bytes = [0, 1, 2, 1, 9, 3];
+            byte?[] signature = [1, null, 3];
+            if (NetEasePlaybackReader.FindPattern(bytes, 0, bytes.Length, signature) != 3 ||
+                NetEasePlaybackReader.FindPattern(bytes, 0, 5, signature) != -1)
+                throw new Exception("网易云播放状态特征扫描错误");
+            Console.WriteLine("音乐标题与特征扫描检查通过。");
+            return;
+        }
         if (args.Contains("--weather-live"))
         {
             using var weather = new WeatherMonitor(() => new AppSettings());

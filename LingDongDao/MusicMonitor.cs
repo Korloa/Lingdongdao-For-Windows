@@ -13,6 +13,7 @@ internal sealed class MusicMonitor : IDisposable
     private readonly Func<AppSettings> _settings;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
+    private readonly MusicFallbackReader _fallback = new();
     private MusicSnapshot? _current;
     private bool _busy;
     private bool _disposed;
@@ -48,32 +49,36 @@ internal sealed class MusicMonitor : IDisposable
         _busy = true;
         try
         {
-            _manager ??= await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
-            foreach (GlobalSystemMediaTransportControlsSession session in _manager.GetSessions())
+            try
             {
-                string source = session.SourceAppUserModelId ?? "";
-                if (!IsSupportedSource(source) ||
-                    session.GetPlaybackInfo()?.PlaybackStatus !=
-                    GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
-                    continue;
-
-                GlobalSystemMediaTransportControlsSessionMediaProperties? properties =
-                    await session.TryGetMediaPropertiesAsync();
-                if (_disposed || !_settings().MusicEnabled) return;
-                string title = string.IsNullOrWhiteSpace(properties?.Title) ? "正在播放音乐" : properties.Title.Trim();
-                string artist = properties?.Artist?.Trim() ?? "";
-                var snapshot = new MusicSnapshot(source, title, artist);
-                StatusText = $"{snapshot.PlayerName}：{title}";
-                if (snapshot != _current)
+                _manager ??= await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+                foreach (GlobalSystemMediaTransportControlsSession session in _manager.GetSessions())
                 {
-                    _current = snapshot;
-                    Playing?.Invoke(snapshot);
-                }
-                return;
-            }
+                    string source = session.SourceAppUserModelId ?? "";
+                    if (!IsSupportedSource(source) ||
+                        session.GetPlaybackInfo()?.PlaybackStatus !=
+                        GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                        continue;
 
-            StatusText = "未发现正在播放的网易云或酷狗媒体会话";
-            ClearCurrent();
+                    GlobalSystemMediaTransportControlsSessionMediaProperties? properties =
+                        await session.TryGetMediaPropertiesAsync();
+                    if (_disposed || !_settings().MusicEnabled) return;
+                    string title = string.IsNullOrWhiteSpace(properties?.Title) ? "正在播放音乐" : properties.Title.Trim();
+                    string artist = properties?.Artist?.Trim() ?? "";
+                    SetCurrent(new MusicSnapshot(source, title, artist), $"Windows 媒体会话：{title}");
+                    return;
+                }
+            }
+            catch (Exception) { _manager = null; }
+
+            MusicSnapshot? fallback = await Task.Run(_fallback.Read);
+            if (_disposed || !_settings().MusicEnabled) return;
+            if (fallback is not null) SetCurrent(fallback, _fallback.StatusText);
+            else
+            {
+                StatusText = _fallback.StatusText;
+                ClearCurrent();
+            }
         }
         catch (Exception exception)
         {
@@ -83,6 +88,14 @@ internal sealed class MusicMonitor : IDisposable
         {
             _busy = false;
         }
+    }
+
+    private void SetCurrent(MusicSnapshot snapshot, string status)
+    {
+        StatusText = status;
+        if (snapshot == _current) return;
+        _current = snapshot;
+        Playing?.Invoke(snapshot);
     }
 
     private void ClearCurrent()

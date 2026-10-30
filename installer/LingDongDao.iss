@@ -1,4 +1,4 @@
-#define AppVersion "0.5.2"
+#define AppVersion "0.5.3"
 #define AppName "灵动岛"
 
 [Setup]
@@ -32,6 +32,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: unchecked
 [Files]
 Source: "..\dist\LingDongDao.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: isreadme
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"
 
 [Icons]
 Name: "{group}\灵动岛"; Filename: "{app}\LingDongDao.exe"

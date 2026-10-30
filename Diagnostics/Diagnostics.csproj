@@ -8,16 +8,19 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6"/>
-    <Compile Include="..\LingDongDao\StatusMonitor.cs" Link="StatusMonitor.cs"/>
-    <Compile Include="..\LingDongDao\IslandNotice.cs" Link="IslandNotice.cs"/>
-    <Compile Include="..\LingDongDao\AppSettings.cs" Link="AppSettings.cs"/>
-    <Compile Include="..\LingDongDao\ThunderstormForecast.cs" Link="ThunderstormForecast.cs"/>
-    <Compile Include="..\LingDongDao\WeatherMonitor.cs" Link="WeatherMonitor.cs"/>
-    <Compile Include="..\LingDongDao\ClipboardImageConverter.cs" Link="ClipboardImageConverter.cs"/>
-    <Compile Include="..\LingDongDao\ClipboardImageEffects.cs" Link="ClipboardImageEffects.cs"/>
-    <Compile Include="..\LingDongDao\ImageEditOperations.cs" Link="ImageEditOperations.cs"/>
-    <Compile Include="..\LingDongDao\IdleHoverZone.cs" Link="IdleHoverZone.cs"/>
-    <Compile Include="..\LingDongDao\MusicMonitor.cs" Link="MusicMonitor.cs"/>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <Compile Include="..\LingDongDao\StatusMonitor.cs" Link="StatusMonitor.cs" />
+    <Compile Include="..\LingDongDao\IslandNotice.cs" Link="IslandNotice.cs" />
+    <Compile Include="..\LingDongDao\AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="..\LingDongDao\ThunderstormForecast.cs" Link="ThunderstormForecast.cs" />
+    <Compile Include="..\LingDongDao\WeatherMonitor.cs" Link="WeatherMonitor.cs" />
+    <Compile Include="..\LingDongDao\ClipboardImageConverter.cs" Link="ClipboardImageConverter.cs" />
+    <Compile Include="..\LingDongDao\ClipboardImageEffects.cs" Link="ClipboardImageEffects.cs" />
+    <Compile Include="..\LingDongDao\ImageEditOperations.cs" Link="ImageEditOperations.cs" />
+    <Compile Include="..\LingDongDao\IdleHoverZone.cs" Link="IdleHoverZone.cs" />
+    <Compile Include="..\LingDongDao\MusicMonitor.cs" Link="MusicMonitor.cs" />
+    <Compile Include="..\LingDongDao\MusicFallbackReader.cs" Link="MusicFallbackReader.cs" />
+    <Compile Include="..\LingDongDao\NetEasePlaybackReader.cs" Link="NetEasePlaybackReader.cs" />
+    <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
   </ItemGroup>
 </Project>
