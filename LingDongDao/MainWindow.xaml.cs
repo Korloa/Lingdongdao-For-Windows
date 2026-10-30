@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -8,12 +9,14 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Windows.Input;
+using System.Windows.Ink;
 using Button = System.Windows.Controls.Button;
 using Canvas = System.Windows.Controls.Canvas;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using Forms = System.Windows.Forms;
 using DrawingColor = System.Drawing.Color;
 using MediaColor = System.Windows.Media.Color;
+using Point = System.Windows.Point;
 
 namespace LingDongDao;
 
@@ -47,12 +50,22 @@ public partial class MainWindow : Window
     private BitmapSource? _pickerImage;
     private BitmapSource? _imagePreviewSource;
     private string? _imagePreviewPath;
+    private double _imagePreviewZoom = 1;
+    private bool _imageEditing;
+    private BitmapSource? _editImage;
+    private byte[]? _editEncodedBytes;
+    private string _editExtension = "png";
+    private long _editSourceBytes;
+    private readonly Stack<EditSnapshot> _editHistory = new();
+    private EditTool _editTool;
+    private Point? _cropStart;
     private bool _hoverExpanded;
     private bool _pickerOpen;
     private bool _convertHotkeyRegistered;
     private bool _styleHotkeyRegistered;
     private bool _compressHotkeyRegistered;
     private PickerOperation _pickerOperation;
+    private int[] _pickerOptionIndices = [];
     private double _pickerItemWidth;
     private int _pickerIndex = 1;
     private Button[] _formatButtons = [];
@@ -63,6 +76,10 @@ public partial class MainWindow : Window
     private int _formatAnimationToken;
     private IntPtr _focusBeforePicker;
     private DateTime _ignoreIslandClickUntilUtc;
+    private DateTime _imageZoomHoldUntilUtc;
+
+    private enum EditTool { None, Draw, Crop, Compress, Style }
+    private sealed record EditSnapshot(BitmapSource Image, byte[]? EncodedBytes, string Extension, long SourceBytes);
 
     public MainWindow(bool previewOnStart)
     {
@@ -70,6 +87,12 @@ public partial class MainWindow : Window
         _settings.StartWithWindows = StartupManager.IsEnabledForCurrentExecutable();
         InitializeComponent();
         ImageHoverPopup.PlacementTarget = Island;
+        ImageStyleChoice.ItemsSource = ClipboardImageEffects.Styles;
+        ImageStyleChoice.SelectedIndex = 0;
+        ImageEditInk.DefaultDrawingAttributes = new DrawingAttributes
+        {
+            Color = MediaColor.FromRgb(244, 197, 138), Width = 3, Height = 3, FitToCurve = true
+        };
         CreateFormatButtons();
         ApplyVisualSettings();
         _powerMonitor = new PowerMonitor(() => _settings);
@@ -98,7 +121,8 @@ public partial class MainWindow : Window
         _closeTimer.Tick += (_, _) => EndTemporaryNotice();
         _imageHoverCloseTimer.Tick += (_, _) =>
         {
-            if (PreviewImageFrame.IsMouseOver || ImageHoverPanel.IsMouseOver) return;
+            if (_imageEditing || DateTime.UtcNow < _imageZoomHoldUntilUtc ||
+                PreviewImageFrame.IsMouseOver || ImageHoverPanel.IsMouseOver) return;
             HideImagePreview();
             if (_isOpen && !_pickerOpen && !_isPersistentMusicNotice &&
                 CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
@@ -479,7 +503,7 @@ public partial class MainWindow : Window
 
     private void Island_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (_hoverExpanded && !_pickerOpen) Collapse();
+        if (_hoverExpanded && !_pickerOpen && !_imageEditing) Collapse();
     }
 
     private void PreviewImageFrame_MouseEnter(object sender, MouseEventArgs e)
@@ -496,6 +520,7 @@ public partial class MainWindow : Window
     private void OpenImagePreview()
     {
         if (!_isOpen || PreviewImageFrame.Visibility != Visibility.Visible) return;
+        if (_imageEditing) return;
         _imageHoverCloseTimer.Stop();
         try
         {
@@ -504,7 +529,6 @@ public partial class MainWindow : Window
                 var image = new BitmapImage();
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
-                image.DecodePixelWidth = (int)Math.Round(CurrentVisualSettings.ImagePreviewSize * 2);
                 image.UriSource = new Uri(_imagePreviewPath);
                 image.EndInit();
                 image.Freeze();
@@ -530,32 +554,363 @@ public partial class MainWindow : Window
 
     private void PreviewImageFrame_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (ImageHoverPopup.IsOpen) _imageHoverCloseTimer.Start();
+        if (ImageHoverPopup.IsOpen && !_imageEditing) _imageHoverCloseTimer.Start();
     }
 
     private void ImageHoverPanel_MouseEnter(object sender, MouseEventArgs e) => _imageHoverCloseTimer.Stop();
 
     private void ImageHoverPanel_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (ImageHoverPopup.IsOpen) _imageHoverCloseTimer.Start();
+        if (ImageHoverPopup.IsOpen && !_imageEditing) _imageHoverCloseTimer.Start();
+    }
+
+    private void ImageHoverPanel_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!ImageHoverPopup.IsOpen) return;
+        try
+        {
+            CommitInkStrokes();
+            _imagePreviewZoom = Math.Clamp(_imagePreviewZoom * (e.Delta > 0 ? 1.2 : 1 / 1.2), 0.5, 4);
+            _imageZoomHoldUntilUtc = DateTime.UtcNow.AddMilliseconds(900);
+            LayoutImageHoverPreview();
+        }
+        catch (Exception exception) { if (_imageEditing) ImageEditStatus.Text = exception.Message; }
+        e.Handled = true;
     }
 
     private void LayoutImageHoverPreview()
     {
-        if (_imagePreviewSource is null) return;
+        BitmapSource? source = _imageEditing ? _editImage : _imagePreviewSource;
+        if (source is null) return;
         double maxSide = CurrentVisualSettings.ImagePreviewSize;
-        double scale = Math.Min(maxSide / _imagePreviewSource.PixelWidth,
-                                maxSide / _imagePreviewSource.PixelHeight);
-        ImageHoverFull.Width = Math.Max(1, Math.Round(_imagePreviewSource.PixelWidth * scale));
-        ImageHoverFull.Height = Math.Max(1, Math.Round(_imagePreviewSource.PixelHeight * scale));
-        ImageHoverPopup.HorizontalOffset = (Island.ActualWidth - ImageHoverFull.Width - 20) / 2;
+        double scale = Math.Min(maxSide / source.PixelWidth, maxSide / source.PixelHeight) * _imagePreviewZoom;
+        double width = Math.Max(1, Math.Round(source.PixelWidth * scale));
+        double height = Math.Max(1, Math.Round(source.PixelHeight * scale));
+        ImageHoverFull.Width = ImageStage.Width = ImageEditInk.Width = ImageCropOverlay.Width = width;
+        ImageHoverFull.Height = ImageStage.Height = ImageEditInk.Height = ImageCropOverlay.Height = height;
+        ImageHoverScroll.MaxWidth = Math.Max(200, SystemParameters.PrimaryScreenWidth - 50);
+        ImageHoverScroll.MaxHeight = Math.Max(140,
+            SystemParameters.PrimaryScreenHeight - Island.ActualHeight - (_imageEditing ? 160 : 45));
+        double panelWidth = Math.Min(width, ImageHoverScroll.MaxWidth);
+        if (_imageEditing) panelWidth = Math.Max(panelWidth, 380);
+        ImageHoverPopup.HorizontalOffset = (Island.ActualWidth - panelWidth - 20) / 2;
     }
 
     private void HideImagePreview()
     {
         _imageHoverCloseTimer.Stop();
+        DiscardImageEdit();
         ImageHoverPopup.IsOpen = false;
         ImageHoverFull.Source = null;
+        _imagePreviewZoom = 1;
+    }
+
+    private void ImageEditButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_imagePreviewSource is null || _imageEditing) return;
+        try
+        {
+            _editImage = _imagePreviewSource;
+            _editEncodedBytes = null;
+            _editExtension = "png";
+            _editSourceBytes = _imagePreviewPath is not null && File.Exists(_imagePreviewPath)
+                ? new FileInfo(_imagePreviewPath).Length
+                : ClipboardImageConverter.EncodeImage(_editImage, "PNG").LongLength;
+            _editHistory.Clear();
+            _imageEditing = true;
+            _editTool = EditTool.None;
+            ImageEditButton.Visibility = Visibility.Collapsed;
+            ImageEditorBar.Visibility = Visibility.Visible;
+            ImageEditStatus.Text = "滚轮缩放 · 选择工具开始编辑";
+            _closeTimer.Stop();
+            _imageHoverCloseTimer.Stop();
+            LayoutImageHoverPreview();
+        }
+        catch (Exception exception)
+        {
+            _editImage = null;
+            ShowNotice(new IslandNotice(NoticeKind.ClipboardImage, "图片无法编辑", exception.Message));
+        }
+    }
+
+    private void ImageDraw_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectEditTool(EditTool.Draw);
+            ImageEditStatus.Text = "在图片上拖动鼠标画画";
+        }
+        catch (Exception exception) { ImageEditStatus.Text = exception.Message; }
+    }
+
+    private void ImageCrop_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectEditTool(EditTool.Crop);
+            ImageEditStatus.Text = "在图片上拖动框选截图区域";
+        }
+        catch (Exception exception) { ImageEditStatus.Text = exception.Message; }
+    }
+
+    private void ImageCompress_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectEditTool(EditTool.Compress);
+            RefreshEditSizeChoices();
+        }
+        catch (Exception exception) { ImageEditStatus.Text = exception.Message; }
+    }
+
+    private void ImageStyle_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectEditTool(EditTool.Style);
+            ImageStyleChoice.SelectedIndex = 0;
+            ImageEditStatus.Text = "选择风格后点击应用";
+        }
+        catch (Exception exception) { ImageEditStatus.Text = exception.Message; }
+    }
+
+    private void SelectEditTool(EditTool tool, bool commitInk = true)
+    {
+        if (!_imageEditing) return;
+        if (commitInk && _editTool == EditTool.Draw) CommitInkStrokes();
+        _editTool = tool;
+        ImageEditInk.Visibility = tool == EditTool.Draw ? Visibility.Visible : Visibility.Collapsed;
+        ImageCropOverlay.Visibility = tool == EditTool.Crop ? Visibility.Visible : Visibility.Collapsed;
+        ImageCropSelection.Visibility = Visibility.Collapsed;
+        ImageEditOptions.Visibility = tool is EditTool.Style or EditTool.Compress
+            ? Visibility.Visible : Visibility.Collapsed;
+        ImageStyleChoice.Visibility = tool == EditTool.Style ? Visibility.Visible : Visibility.Collapsed;
+        ImageSizeChoice.Visibility = tool == EditTool.Compress ? Visibility.Visible : Visibility.Collapsed;
+        Button[] toolButtons = [ImageDrawButton, ImageCropButton, ImageCompressButton, ImageStyleButton];
+        foreach (Button button in toolButtons)
+        {
+            button.ClearValue(Button.BackgroundProperty);
+            button.ClearValue(Button.ForegroundProperty);
+        }
+        if (tool != EditTool.None)
+        {
+            Button selected = toolButtons[(int)tool - 1];
+            selected.Background = new SolidColorBrush(MediaColor.FromRgb(244, 197, 138));
+            selected.Foreground = new SolidColorBrush(MediaColor.FromRgb(23, 32, 33));
+        }
+    }
+
+    private void CommitInkStrokes()
+    {
+        if (!_imageEditing || _editImage is null || ImageEditInk.Strokes.Count == 0) return;
+        BitmapSource result = ImageEditOperations.Draw(_editImage, ImageEditInk.Strokes,
+            ImageStage.Width, ImageStage.Height);
+        PushEditUndo();
+        _editImage = result;
+        _editEncodedBytes = null;
+        _editExtension = "png";
+        _editSourceBytes = -1;
+        ImageHoverFull.Source = result;
+        ImageEditInk.Strokes.Clear();
+    }
+
+    private void PushEditUndo()
+    {
+        if (_editImage is not null)
+            _editHistory.Push(new EditSnapshot(_editImage, _editEncodedBytes, _editExtension, _editSourceBytes));
+    }
+
+    private void ImageCrop_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_imageEditing || _editTool != EditTool.Crop) return;
+        _cropStart = e.GetPosition(ImageCropOverlay);
+        Canvas.SetLeft(ImageCropSelection, _cropStart.Value.X);
+        Canvas.SetTop(ImageCropSelection, _cropStart.Value.Y);
+        ImageCropSelection.Width = ImageCropSelection.Height = 0;
+        ImageCropSelection.Visibility = Visibility.Visible;
+        ImageCropOverlay.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void ImageCrop_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_cropStart is null) return;
+        Point end = e.GetPosition(ImageCropOverlay);
+        double x = Math.Clamp(end.X, 0, ImageStage.Width);
+        double y = Math.Clamp(end.Y, 0, ImageStage.Height);
+        Canvas.SetLeft(ImageCropSelection, Math.Min(x, _cropStart.Value.X));
+        Canvas.SetTop(ImageCropSelection, Math.Min(y, _cropStart.Value.Y));
+        ImageCropSelection.Width = Math.Abs(x - _cropStart.Value.X);
+        ImageCropSelection.Height = Math.Abs(y - _cropStart.Value.Y);
+        e.Handled = true;
+    }
+
+    private void ImageCrop_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_cropStart is null || _editImage is null) return;
+        ImageCropOverlay.ReleaseMouseCapture();
+        Rect selection = new(Canvas.GetLeft(ImageCropSelection), Canvas.GetTop(ImageCropSelection),
+            ImageCropSelection.Width, ImageCropSelection.Height);
+        _cropStart = null;
+        ImageCropSelection.Visibility = Visibility.Collapsed;
+        if (selection.Width < 6 || selection.Height < 6)
+        {
+            ImageEditStatus.Text = "框选区域太小，请重新拖动";
+            return;
+        }
+        try
+        {
+            BitmapSource cropped = ImageEditOperations.Crop(_editImage, selection,
+                ImageStage.Width, ImageStage.Height);
+            PushEditUndo();
+            _editImage = cropped;
+            _editEncodedBytes = null;
+            _editExtension = "png";
+            _editSourceBytes = -1;
+            ImageHoverFull.Source = cropped;
+            SelectEditTool(EditTool.None, false);
+            LayoutImageHoverPreview();
+            ImageEditStatus.Text = $"已截取 {cropped.PixelWidth} × {cropped.PixelHeight} · 可撤回";
+        }
+        catch (Exception exception) { ImageEditStatus.Text = exception.Message; }
+        e.Handled = true;
+    }
+
+    private void RefreshEditSizeChoices()
+    {
+        if (_editImage is null) return;
+        if (_editSourceBytes < 0)
+            _editSourceBytes = ClipboardImageConverter.EncodeImage(_editImage, "PNG").LongLength;
+        ImageSizeChoice.Items.Clear();
+        foreach (int index in ClipboardImageEffects.SmallerSizeOptions(_editSourceBytes))
+            ImageSizeChoice.Items.Add(new System.Windows.Controls.ComboBoxItem
+            {
+                Content = ClipboardImageEffects.SizeDescriptions[index], Tag = index
+            });
+        if (ImageSizeChoice.Items.Count == 0)
+        {
+            SelectEditTool(EditTool.None, false);
+            ImageEditStatus.Text = "当前图片已小于最小压缩档位";
+        }
+        else
+        {
+            ImageSizeChoice.SelectedIndex = 0;
+            ImageEditStatus.Text = $"原图约 {_editSourceBytes / 1024.0:0.#} KB · 选择更小档位";
+        }
+    }
+
+    private void ImageApplyOption_Click(object sender, RoutedEventArgs e)
+    {
+        if (_editImage is null) return;
+        try
+        {
+            if (_editTool == EditTool.Style)
+            {
+                int index = ImageStyleChoice.SelectedIndex;
+                if (index < 0) return;
+                BitmapSource styled = ClipboardImageEffects.ApplyStyle(_editImage, index);
+                PushEditUndo();
+                _editImage = styled;
+                _editEncodedBytes = null;
+                _editExtension = "png";
+                _editSourceBytes = -1;
+                ImageEditStatus.Text = $"已应用{ClipboardImageEffects.Styles[index]}风格 · 可撤回";
+            }
+            else if (_editTool == EditTool.Compress &&
+                     ImageSizeChoice.SelectedItem is System.Windows.Controls.ComboBoxItem { Tag: int index })
+            {
+                (byte[] bytes, _) = ClipboardImageEffects.Compress(_editImage, index);
+                BitmapSource compressed = ImageEditOperations.DecodeJpeg(bytes);
+                PushEditUndo();
+                _editImage = compressed;
+                _editEncodedBytes = bytes;
+                _editExtension = "jpg";
+                _editSourceBytes = bytes.LongLength;
+                ImageEditStatus.Text = $"已压缩到 {bytes.Length / 1024.0:0.#} KB · 可撤回";
+                SelectEditTool(EditTool.None, false);
+            }
+            else return;
+            ImageHoverFull.Source = _editImage;
+            LayoutImageHoverPreview();
+        }
+        catch (Exception exception) { ImageEditStatus.Text = $"处理失败：{exception.Message}"; }
+    }
+
+    private void ImageUndo_Click(object sender, RoutedEventArgs e)
+    {
+        if (ImageEditInk.Strokes.Count > 0)
+        {
+            ImageEditInk.Strokes.RemoveAt(ImageEditInk.Strokes.Count - 1);
+            ImageEditStatus.Text = "已撤回上一笔";
+            return;
+        }
+        if (_editHistory.Count == 0)
+        {
+            ImageEditStatus.Text = "没有可撤回的操作";
+            return;
+        }
+        SelectEditTool(EditTool.None, false);
+        EditSnapshot previous = _editHistory.Pop();
+        _editImage = previous.Image;
+        _editEncodedBytes = previous.EncodedBytes;
+        _editExtension = previous.Extension;
+        _editSourceBytes = previous.SourceBytes;
+        ImageHoverFull.Source = _editImage;
+        LayoutImageHoverPreview();
+        ImageEditStatus.Text = "已撤回上一步";
+    }
+
+    private void ImageCancel_Click(object sender, RoutedEventArgs e)
+    {
+        DiscardImageEdit();
+        LayoutImageHoverPreview();
+        if (!ImageHoverPanel.IsMouseOver) _imageHoverCloseTimer.Start();
+    }
+
+    private void ImageConfirm_Click(object sender, RoutedEventArgs e)
+    {
+        if (_editImage is null) return;
+        try
+        {
+            CommitInkStrokes();
+            BitmapSource result = _editImage!;
+            byte[] bytes = _editEncodedBytes ?? ClipboardImageConverter.EncodeImage(result, "PNG");
+            string extension = _editEncodedBytes is null ? "png" : _editExtension;
+            ClipboardImageConverter.CopyEncoded(result, extension, bytes,
+                _clipboardMonitor.SuppressNextUpdate);
+            HideImagePreview();
+            ShowNoticeCore(new IslandNotice(NoticeKind.ImageConverted,
+                "图片编辑完成", $"已复制 {extension.ToUpperInvariant()} · 可粘贴"), false);
+        }
+        catch (Exception exception)
+        {
+            _clipboardMonitor.ClearSuppression();
+            ImageEditStatus.Text = $"保存失败：{exception.Message}";
+        }
+    }
+
+    private void DiscardImageEdit()
+    {
+        if (!_imageEditing) return;
+        _imageEditing = false;
+        _editImage = null;
+        _editEncodedBytes = null;
+        _editHistory.Clear();
+        _cropStart = null;
+        _editTool = EditTool.None;
+        ImageEditInk.Strokes.Clear();
+        ImageEditInk.Visibility = Visibility.Collapsed;
+        ImageCropOverlay.Visibility = Visibility.Collapsed;
+        ImageCropSelection.Visibility = Visibility.Collapsed;
+        ImageEditOptions.Visibility = Visibility.Collapsed;
+        ImageEditorBar.Visibility = Visibility.Collapsed;
+        ImageEditButton.Visibility = Visibility.Visible;
+        foreach (Button button in new[] { ImageDrawButton, ImageCropButton, ImageCompressButton, ImageStyleButton })
+        {
+            button.ClearValue(Button.BackgroundProperty);
+            button.ClearValue(Button.ForegroundProperty);
+        }
+        ImageHoverFull.Source = _imagePreviewSource;
     }
 
     private void ShowCharging(PowerSnapshot power)
@@ -582,7 +937,7 @@ public partial class MainWindow : Window
 
     private void EndTemporaryNotice()
     {
-        if (_pickerOpen) return;
+        if (_pickerOpen || _imageEditing) return;
         if (_musicNotice is not null && CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
             ShowNoticeCore(_musicNotice, false);
         else Collapse();
@@ -593,7 +948,7 @@ public partial class MainWindow : Window
     private string[] PickerItems => _pickerOperation switch
     {
         PickerOperation.Style => ClipboardImageEffects.Styles,
-        PickerOperation.Compress => ClipboardImageEffects.Sizes,
+        PickerOperation.Compress => _pickerOptionIndices.Select(index => ClipboardImageEffects.Sizes[index]).ToArray(),
         _ => ClipboardImageConverter.Formats
     };
 
@@ -606,15 +961,29 @@ public partial class MainWindow : Window
 
     private void OpenPicker(PickerOperation operation)
     {
-        if (!PickerEnabled(operation) || CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic)
+        if (_imageEditing || !PickerEnabled(operation) || CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic)
             return;
         try
         {
             BitmapSource? image = ClipboardMonitor.ReadCurrentImage();
             if (image is null)
             {
+                if (_pickerOpen) ClosePicker(showPrevious: false);
                 ShowNotice(new IslandNotice(NoticeKind.ClipboardImage, "先复制图片", $"然后按 Ctrl+{(int)operation} 打开选择条"));
                 return;
+            }
+
+            if (operation == PickerOperation.Compress)
+            {
+                long originalBytes = ClipboardMonitor.GetImageByteLength(image);
+                _pickerOptionIndices = ClipboardImageEffects.SmallerSizeOptions(originalBytes);
+                if (_pickerOptionIndices.Length == 0)
+                {
+                    if (_pickerOpen) ClosePicker(showPrevious: false);
+                    ShowNotice(new IslandNotice(NoticeKind.ClipboardImage,
+                        "图片已经很小", "没有比当前图片更小的压缩档位"));
+                    return;
+                }
             }
 
             if (!_pickerOpen) _focusBeforePicker = GetForegroundWindow();
@@ -711,7 +1080,15 @@ public partial class MainWindow : Window
         for (int slot = 0; slot < _formatButtons.Length; slot++)
         {
             Button button = _formatButtons[slot];
-            int index = (_pickerIndex + slot - 3 + count * 2) % count;
+            int linearIndex = _pickerIndex + slot - 3;
+            if (_pickerOperation == PickerOperation.Compress && (linearIndex < 0 || linearIndex >= count))
+            {
+                button.Visibility = Visibility.Collapsed;
+                continue;
+            }
+            button.Visibility = Visibility.Visible;
+            int index = _pickerOperation == PickerOperation.Compress ? linearIndex
+                : (linearIndex + count * 2) % count;
             bool selected = slot == 3;
             button.Tag = index;
             button.Content = items[index];
@@ -761,6 +1138,8 @@ public partial class MainWindow : Window
 
     private void StartFormatMove(int direction)
     {
+        if (_pickerOperation == PickerOperation.Compress &&
+            (_pickerIndex + direction < 0 || _pickerIndex + direction >= PickerItems.Length)) return;
         _formatMoving = true;
         int token = ++_formatAnimationToken;
         TimeSpan duration = TimeSpan.FromMilliseconds(CurrentVisualSettings.FormatScrollMilliseconds);
@@ -771,7 +1150,8 @@ public partial class MainWindow : Window
         {
             if (!_pickerOpen || token != _formatAnimationToken) return;
             int count = PickerItems.Length;
-            _pickerIndex = (_pickerIndex + direction + count) % count;
+            _pickerIndex = _pickerOperation == PickerOperation.Compress
+                ? _pickerIndex + direction : (_pickerIndex + direction + count) % count;
             _formatMoving = false;
             RenderFormatButtons();
             SetFormatRestPosition();
@@ -838,6 +1218,7 @@ public partial class MainWindow : Window
     {
         if (!_pickerOpen || _pickerImage is null) return;
         string item = PickerItems[index];
+        int optionIndex = _pickerOperation == PickerOperation.Compress ? _pickerOptionIndices[index] : index;
         try
         {
             _ignoreIslandClickUntilUtc = DateTime.UtcNow.AddMilliseconds(500);
@@ -849,9 +1230,9 @@ public partial class MainWindow : Window
             }
             else if (_pickerOperation == PickerOperation.Compress)
             {
-                var compressed = ClipboardImageEffects.CompressAndCopy(_pickerImage, index,
+                var compressed = ClipboardImageEffects.CompressAndCopy(_pickerImage, optionIndex,
                     _clipboardMonitor.SuppressNextUpdate);
-                detail = $"{ClipboardImageEffects.SizeDescriptions[index]} 档 · 实际 {compressed.Bytes / 1024.0:0.#} KB";
+                detail = $"{ClipboardImageEffects.SizeDescriptions[optionIndex]} 档 · 实际 {compressed.Bytes / 1024.0:0.#} KB";
             }
             else
             {
@@ -861,7 +1242,7 @@ public partial class MainWindow : Window
             }
             ClosePicker(showPrevious: false);
             ShowNoticeCore(new IslandNotice(NoticeKind.ImageConverted,
-                $"{(_pickerOperation == PickerOperation.Compress ? ClipboardImageEffects.SizeDescriptions[index] : item)} 复制成功", detail), false);
+                $"{(_pickerOperation == PickerOperation.Compress ? ClipboardImageEffects.SizeDescriptions[optionIndex] : item)} 复制成功", detail), false);
         }
         catch (Exception exception)
         {
@@ -887,6 +1268,7 @@ public partial class MainWindow : Window
 
     private void ShowNoticeCore(IslandNotice notice, bool preview)
     {
+        if (_imageEditing) return;
         if (_pickerOpen && !preview) return;
         if (!preview && CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
         HideImagePreview();
@@ -931,7 +1313,7 @@ public partial class MainWindow : Window
 
     private void Collapse()
     {
-        if (_pickerOpen) return;
+        if (_pickerOpen || _imageEditing) return;
         _closeTimer.Stop();
         HideImagePreview();
         if (!_isOpen) return;

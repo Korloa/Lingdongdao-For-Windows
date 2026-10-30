@@ -12,6 +12,9 @@ internal static class ClipboardImageEffects
     public static readonly string[] SizeDescriptions = ["<200KB", "200–500KB", "500KB–1MB", "1MB–2MB", "2MB–5MB"];
     public static readonly int[] SizeLimits = [200 * 1024, 500 * 1024, 1024 * 1024, 2 * 1024 * 1024, 5 * 1024 * 1024];
 
+    public static int[] SmallerSizeOptions(long originalBytes) => Enumerable.Range(0, SizeLimits.Length)
+        .Where(index => SizeLimits[index] < originalBytes).ToArray();
+
     public static BitmapSource ApplyStyle(BitmapSource image, int styleIndex)
     {
         if ((uint)styleIndex >= Styles.Length) throw new ArgumentOutOfRangeException(nameof(styleIndex));

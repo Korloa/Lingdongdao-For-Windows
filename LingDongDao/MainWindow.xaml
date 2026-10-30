@@ -118,13 +118,90 @@
             </Button.Template>
         </Button>
         <Popup x:Name="ImageHoverPopup" Placement="Bottom" PlacementTarget="{Binding ElementName=Island}"
-               VerticalOffset="8" AllowsTransparency="True" StaysOpen="True" Focusable="False">
+               VerticalOffset="8" AllowsTransparency="True" StaysOpen="True" Focusable="True">
             <Border x:Name="ImageHoverPanel" Padding="9" CornerRadius="14"
                     Background="#F1090B11" BorderBrush="#667D8DA5" BorderThickness="1"
                     AutomationProperties.Name="图片悬浮预览"
-                    MouseEnter="ImageHoverPanel_MouseEnter" MouseLeave="ImageHoverPanel_MouseLeave">
-                <Image x:Name="ImageHoverFull" Stretch="Uniform" Width="260" Height="260"
-                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                    MouseEnter="ImageHoverPanel_MouseEnter" MouseLeave="ImageHoverPanel_MouseLeave"
+                    PreviewMouseWheel="ImageHoverPanel_PreviewMouseWheel">
+                <Border.Resources>
+                    <Style x:Key="EditChip" TargetType="Button">
+                        <Setter Property="Background" Value="#273336"/>
+                        <Setter Property="Foreground" Value="#EAF1ED"/>
+                        <Setter Property="BorderBrush" Value="#4B6260"/>
+                        <Setter Property="BorderThickness" Value="1"/>
+                        <Setter Property="Padding" Value="9,5"/>
+                        <Setter Property="Margin" Value="3"/>
+                        <Setter Property="Cursor" Value="Hand"/>
+                        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}"
+                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                            CornerRadius="5" Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#405855"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Resources>
+                <StackPanel>
+                    <Grid>
+                        <ScrollViewer x:Name="ImageHoverScroll" HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto" Background="#11171A">
+                            <Grid x:Name="ImageStage" Width="260" Height="260">
+                                <Image x:Name="ImageHoverFull" Stretch="Fill" Width="260" Height="260"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <InkCanvas x:Name="ImageEditInk" Background="#01000000"
+                                           Visibility="Collapsed"/>
+                                <Canvas x:Name="ImageCropOverlay" Background="#01000000" Visibility="Collapsed"
+                                        MouseLeftButtonDown="ImageCrop_MouseDown"
+                                        MouseMove="ImageCrop_MouseMove"
+                                        MouseLeftButtonUp="ImageCrop_MouseUp">
+                                    <Rectangle x:Name="ImageCropSelection" Visibility="Collapsed"
+                                               Stroke="#F4C58A" StrokeThickness="2" Fill="#44F4C58A"/>
+                                </Canvas>
+                            </Grid>
+                        </ScrollViewer>
+                        <Button x:Name="ImageEditButton" Content="✎" ToolTip="编辑图片"
+                                Width="32" Height="32" FontSize="18" FontWeight="Bold"
+                                Style="{StaticResource EditChip}" HorizontalAlignment="Right"
+                                VerticalAlignment="Bottom" Margin="0,0,7,7"
+                                Click="ImageEditButton_Click"/>
+                    </Grid>
+                    <StackPanel x:Name="ImageEditorBar" Visibility="Collapsed" MinWidth="380"
+                                HorizontalAlignment="Center" Margin="0,9,0,0">
+                        <WrapPanel HorizontalAlignment="Center">
+                            <Button x:Name="ImageDrawButton" Content="画笔" Style="{StaticResource EditChip}"
+                                    Click="ImageDraw_Click"/>
+                            <Button x:Name="ImageCropButton" Content="截图/裁剪" Style="{StaticResource EditChip}"
+                                    Click="ImageCrop_Click"/>
+                            <Button x:Name="ImageCompressButton" Content="压缩" Style="{StaticResource EditChip}" Click="ImageCompress_Click"/>
+                            <Button x:Name="ImageStyleButton" Content="风格" Style="{StaticResource EditChip}" Click="ImageStyle_Click"/>
+                            <Button Content="↶ 撤回" Style="{StaticResource EditChip}" Click="ImageUndo_Click"/>
+                            <Button Content="取消" Style="{StaticResource EditChip}" Click="ImageCancel_Click"/>
+                            <Button Content="✓ 完成" Background="#F4C58A" Foreground="#172021"
+                                    Style="{StaticResource EditChip}" Click="ImageConfirm_Click"/>
+                        </WrapPanel>
+                        <StackPanel x:Name="ImageEditOptions" Orientation="Horizontal" HorizontalAlignment="Center"
+                                    Visibility="Collapsed" Margin="0,5,0,0">
+                            <ComboBox x:Name="ImageStyleChoice" Width="115" Height="28" Visibility="Collapsed"/>
+                            <ComboBox x:Name="ImageSizeChoice" Width="145" Height="28" Visibility="Collapsed"/>
+                            <Button Content="应用" Style="{StaticResource EditChip}" Click="ImageApplyOption_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="ImageEditStatus" Text="滚轮缩放 · 选择工具开始编辑"
+                                   TextAlignment="Center" Foreground="#A9BCB7" FontSize="11"
+                                   Margin="0,7,0,2"/>
+                    </StackPanel>
+                </StackPanel>
             </Border>
         </Popup>
     </Grid>

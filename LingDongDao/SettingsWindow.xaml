@@ -99,7 +99,7 @@
                     <Border Height="1" Background="#36504A" Margin="0,0,0,17"/>
                     <TextBlock Text="LINGDONGDAO" Foreground="#F4C58A" FontSize="10" FontWeight="Bold"
                                FontFamily="Consolas"/>
-                    <TextBlock Text="FOR WINDOWS  /  0.4" Foreground="#7D948F" FontSize="10"
+                    <TextBlock Text="FOR WINDOWS  /  0.5" Foreground="#7D948F" FontSize="10"
                                FontFamily="Consolas" Margin="0,6,0,0"/>
                 </StackPanel>
                 <StackPanel>

@@ -84,7 +84,7 @@ internal sealed class ClipboardMonitor : IDisposable
             if (image is not null)
                 return new IslandNotice(NoticeKind.ClipboardImage, "已复制图片",
                     conversionEnabled ? "Ctrl+0 转换格式" : $"{image.PixelWidth} × {image.PixelHeight}",
-                    MakeThumbnail(image), FullImage: image);
+                    MakeThumbnail(image), FullImage: image, ImagePath: GetImageFilePath());
         }
 
         if (Clipboard.ContainsFileDropList())
@@ -137,6 +137,21 @@ internal sealed class ClipboardMonitor : IDisposable
             image.Freeze();
             return image;
         }
+        return null;
+    }
+
+    public static long GetImageByteLength(BitmapSource image)
+    {
+        string? file = GetImageFilePath();
+        return file is null ? ClipboardImageConverter.EncodeImage(image, "PNG").LongLength
+            : new FileInfo(file).Length;
+    }
+
+    private static string? GetImageFilePath()
+    {
+        if (!Clipboard.ContainsFileDropList()) return null;
+        foreach (string path in Clipboard.GetFileDropList().Cast<string>())
+            if (File.Exists(path) && ImageExtensions.Contains(Path.GetExtension(path))) return path;
         return null;
     }
 

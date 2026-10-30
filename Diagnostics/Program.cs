@@ -3,6 +3,8 @@ using System.IO;
 using System.Windows.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Ink;
+using System.Windows.Input;
 using System.Xml.Linq;
 
 internal static class Program
@@ -80,6 +82,31 @@ internal static class Program
                     throw new Exception($"{ClipboardImageEffects.Styles[style]} 没有改变像素。");
                 Console.WriteLine($"{ClipboardImageEffects.Styles[style]} 风格检查通过。");
             }
+            if (ClipboardImageEffects.SmallerSizeOptions(190 * 1024).Length != 0 ||
+                !ClipboardImageEffects.SmallerSizeOptions(300 * 1024).SequenceEqual([0]) ||
+                !ClipboardImageEffects.SmallerSizeOptions(800 * 1024).SequenceEqual([0, 1]))
+                throw new Exception("压缩档位筛选边界错误。");
+            BitmapSource cropped = ImageEditOperations.Crop(image,
+                new System.Windows.Rect(4, 4, 8, 8), 16, 16);
+            if (cropped.PixelWidth != 8 || cropped.PixelHeight != 8)
+                throw new Exception("截图裁剪尺寸错误。");
+            var stroke = new Stroke(new StylusPointCollection
+            {
+                new StylusPoint(1, 1), new StylusPoint(14, 14)
+            })
+            {
+                DrawingAttributes = new DrawingAttributes
+                {
+                    Color = Colors.Red, Width = 4, Height = 4
+                }
+            };
+            var strokes = new StrokeCollection { stroke };
+            BitmapSource drawn = ImageEditOperations.Draw(image, strokes, 16, 16);
+            byte[] drawnPixel = new byte[4];
+            drawn.CopyPixels(new System.Windows.Int32Rect(8, 8, 1, 1), drawnPixel, 4, 0);
+            if (drawnPixel[0] == 32 && drawnPixel[1] == 100 && drawnPixel[2] == 240)
+                throw new Exception("画笔未写入图片。");
+            Console.WriteLine("压缩档位筛选、截图裁剪、画笔绘制检查通过。");
             var random = new Random(42);
             byte[] noisyPixels = new byte[1200 * 800 * 4];
             random.NextBytes(noisyPixels);
