@@ -38,6 +38,24 @@ internal static class Program
             }
             return;
         }
+        if (args.Contains("--hover-self-test"))
+        {
+            var settings = new AppSettings { TopOffset = 3, LineWidth = 58, LineThickness = 4,
+                HoverHorizontalPadding = 0, HoverVerticalPadding = 2 };
+            const double width = 360, center = width / 2;
+            if (!IdleHoverZone.Contains(settings, width, center, 0) ||
+                !IdleHoverZone.Contains(settings, width, center, 7) ||
+                IdleHoverZone.Contains(settings, width, center + 40, 0) ||
+                IdleHoverZone.Contains(settings, width, center, 12))
+                throw new Exception("顶边横线感应区边界错误。");
+            settings.TopOffset = 20;
+            if (!IdleHoverZone.Contains(settings, width, center, 0) ||
+                !IdleHoverZone.Contains(settings, width, center, 21) ||
+                IdleHoverZone.Contains(settings, width, center, 12))
+                throw new Exception("顶部距离改变后的感应区边界错误。");
+            Console.WriteLine("顶边横线感应区检查通过。");
+            return;
+        }
         if (args.Contains("--image-self-test"))
         {
             byte[] pixels = new byte[16 * 16 * 4];

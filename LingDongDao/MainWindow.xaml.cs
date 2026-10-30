@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private readonly MusicMonitor _musicMonitor;
     private readonly DispatcherTimer _closeTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
     private readonly DispatcherTimer _imageHoverCloseTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
+    private readonly DispatcherTimer _idleHoverTimer = new() { Interval = TimeSpan.FromMilliseconds(45) };
     private readonly Forms.NotifyIcon _trayIcon;
     private bool _isOpen;
     private NoticeKind? _currentKind;
@@ -77,6 +78,7 @@ public partial class MainWindow : Window
     private IntPtr _focusBeforePicker;
     private DateTime _ignoreIslandClickUntilUtc;
     private DateTime _imageZoomHoldUntilUtc;
+    private DateTime _hoverExpandHoldUntilUtc;
 
     private enum EditTool { None, Draw, Crop, Compress, Style }
     private sealed record EditSnapshot(BitmapSource Image, byte[]? EncodedBytes, string Extension, long SourceBytes);
@@ -119,6 +121,8 @@ public partial class MainWindow : Window
         _musicMonitor.Stopped += OnMusicStopped;
         _musicMonitor.Start();
         _closeTimer.Tick += (_, _) => EndTemporaryNotice();
+        _idleHoverTimer.Tick += (_, _) => PollIdleHover();
+        Loaded += (_, _) => _idleHoverTimer.Start();
         _imageHoverCloseTimer.Tick += (_, _) =>
         {
             if (_imageEditing || DateTime.UtcNow < _imageZoomHoldUntilUtc ||
@@ -293,9 +297,9 @@ public partial class MainWindow : Window
         IconBadge.Width = IconBadge.Height = PreviewImageFrame.Width = PreviewImageFrame.Height = visual.IconSize;
         IconBadge.CornerRadius = new CornerRadius(visual.IconSize / 2);
         PreviewImageFrame.Tag = new CornerRadius(Math.Min(visual.ImageCornerRadius, visual.IconSize / 2));
-        IdleHoverTarget.Width = visual.LineWidth + visual.HoverHorizontalPadding * 2;
-        IdleHoverTarget.Height = visual.LineThickness + visual.HoverVerticalPadding;
-        IdleHoverTarget.Margin = new Thickness(0, Math.Max(0, visual.TopOffset - visual.HoverVerticalPadding / 2), 0, 0);
+        IdleHoverTarget.Width = IdleHoverZone.Width(visual);
+        IdleHoverTarget.Height = IdleHoverZone.EdgeHeight(visual);
+        IdleHoverTarget.Margin = new Thickness(0);
         NoticeIcon.Width = NoticeIcon.Height = visual.IconSize * 0.52;
         TitleText.FontSize = visual.TitleFontSize;
         DetailText.FontSize = visual.DetailFontSize;
@@ -447,6 +451,12 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr handle);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { public int X; public int Y; }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint point);
+
     private void PositionAtTop()
     {
         Left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
@@ -481,6 +491,30 @@ public partial class MainWindow : Window
     }
 
     private void IdleHoverTarget_MouseEnter(object sender, MouseEventArgs e)
+        => ExpandFromIdleHover();
+
+    private void PollIdleHover()
+    {
+        if (_pickerOpen || _imageEditing || !CurrentVisualSettings.HoverExpandEnabled ||
+            CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
+        if (_hoverExpanded)
+        {
+            if (DateTime.UtcNow >= _hoverExpandHoldUntilUtc &&
+                !IsCursorInIdleHoverZone() && !Island.IsMouseOver) Collapse();
+            return;
+        }
+        if (!_isOpen && IsCursorInIdleHoverZone()) ExpandFromIdleHover();
+    }
+
+    private bool IsCursorInIdleHoverZone()
+    {
+        if (!GetCursorPos(out NativePoint cursor)) return false;
+        Point local = PointFromScreen(new Point(cursor.X, cursor.Y));
+        return IdleHoverZone.Contains(CurrentVisualSettings,
+            ActualWidth > 0 ? ActualWidth : Width, local.X, local.Y);
+    }
+
+    private void ExpandFromIdleHover()
     {
         if (_isOpen || _pickerOpen || !CurrentVisualSettings.HoverExpandEnabled ||
             CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
@@ -494,6 +528,8 @@ public partial class MainWindow : Window
             : new IslandNotice(NoticeKind.Idle, "灵动岛", "Ctrl+Alt+D 打开控制面板");
         ShowNoticeCore(notice, true);
         _hoverExpanded = true;
+        _hoverExpandHoldUntilUtc = DateTime.UtcNow.AddMilliseconds(
+            CurrentVisualSettings.AnimationMilliseconds + 150);
     }
 
     private void IdleHoverTarget_Click(object sender, RoutedEventArgs e)
@@ -503,7 +539,8 @@ public partial class MainWindow : Window
 
     private void Island_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (_hoverExpanded && !_pickerOpen && !_imageEditing) Collapse();
+        if (_hoverExpanded && !_pickerOpen && !_imageEditing &&
+            DateTime.UtcNow >= _hoverExpandHoldUntilUtc && !IsCursorInIdleHoverZone()) Collapse();
     }
 
     private void PreviewImageFrame_MouseEnter(object sender, MouseEventArgs e)
@@ -1399,6 +1436,7 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _closeTimer.Stop();
+        _idleHoverTimer.Stop();
         if (_registeredHotkey is not null) UnregisterHotKey(_hotkeyHandle, HotkeyId);
         if (_convertHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, ConvertHotkeyId);
         if (_styleHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, StyleHotkeyId);

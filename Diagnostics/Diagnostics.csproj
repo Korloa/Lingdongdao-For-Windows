@@ -17,6 +17,7 @@
     <Compile Include="..\LingDongDao\ClipboardImageConverter.cs" Link="ClipboardImageConverter.cs"/>
     <Compile Include="..\LingDongDao\ClipboardImageEffects.cs" Link="ClipboardImageEffects.cs"/>
     <Compile Include="..\LingDongDao\ImageEditOperations.cs" Link="ImageEditOperations.cs"/>
+    <Compile Include="..\LingDongDao\IdleHoverZone.cs" Link="IdleHoverZone.cs"/>
     <Compile Include="..\LingDongDao\MusicMonitor.cs" Link="MusicMonitor.cs"/>
   </ItemGroup>
 </Project>
