@@ -15,14 +15,18 @@ internal static class ClipboardImageConverter
     public static string ConvertAndCopy(BitmapSource image, string format, Action? beforeClipboardWrite = null)
     {
         if (!Formats.Contains(format)) throw new ArgumentOutOfRangeException(nameof(format));
+        return CopyEncoded(image, format.ToLowerInvariant(), EncodeImage(image, format), beforeClipboardWrite);
+    }
+
+    internal static string CopyEncoded(BitmapSource image, string extension, byte[] bytes,
+        Action? beforeClipboardWrite = null)
+    {
         string folder = Path.Combine(Environment.GetFolderPath(
             Environment.SpecialFolder.LocalApplicationData), "LingDongDao", "Converted");
         Directory.CreateDirectory(folder);
         DeleteOldFiles(folder);
-
-        byte[] bytes = EncodeImage(image, format);
         string path = Path.Combine(folder,
-            $"image_{DateTime.Now:yyyyMMdd_HHmmssfff}_{Guid.NewGuid():N}.{format.ToLowerInvariant()}");
+            $"image_{DateTime.Now:yyyyMMdd_HHmmssfff}_{Guid.NewGuid():N}.{extension}");
         File.WriteAllBytes(path, bytes);
         try
         {

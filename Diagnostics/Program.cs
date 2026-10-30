@@ -10,6 +10,32 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Contains("--image-clipboard-test"))
+        {
+            byte[] pixels = new byte[64 * 64 * 4];
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i] = 64; pixels[i + 1] = 144; pixels[i + 2] = 220; pixels[i + 3] = 255;
+            }
+            var source = BitmapSource.Create(64, 64, 96, 96, PixelFormats.Bgra32, null, pixels, 64 * 4);
+            System.Windows.IDataObject? oldClipboard = null;
+            try { oldClipboard = System.Windows.Clipboard.GetDataObject(); } catch { }
+            try
+            {
+                string styled = ClipboardImageEffects.ApplyStyleAndCopy(source, 2);
+                VerifyImageClipboard(styled, ".png");
+                (string compressed, int bytes) = ClipboardImageEffects.CompressAndCopy(source, 0);
+                VerifyImageClipboard(compressed, ".jpg");
+                if (bytes > 200 * 1024 || bytes != new FileInfo(compressed).Length)
+                    throw new Exception("压缩文件大小或字节数不正确。");
+                Console.WriteLine("图片风格与压缩剪贴板写入检查通过。");
+            }
+            finally
+            {
+                if (oldClipboard is not null) System.Windows.Clipboard.SetDataObject(oldClipboard, true);
+            }
+            return;
+        }
         if (args.Contains("--image-self-test"))
         {
             byte[] pixels = new byte[16 * 16 * 4];
@@ -40,6 +66,34 @@ internal static class Program
                         throw new Exception($"{format} 编码尺寸检查失败。");
                 }
                 Console.WriteLine($"{format} 编码检查通过：{bytes.Length} 字节");
+            }
+            for (int style = 0; style < ClipboardImageEffects.Styles.Length; style++)
+            {
+                BitmapSource styled = ClipboardImageEffects.ApplyStyle(image, style);
+                byte[] pixel = new byte[4];
+                styled.CopyPixels(new System.Windows.Int32Rect(0, 0, 1, 1), pixel, 4, 0);
+                if (styled.PixelWidth != 16 || styled.PixelHeight != 16 || pixel[3] != 255)
+                    throw new Exception($"{ClipboardImageEffects.Styles[style]} 尺寸或透明度错误。");
+                if (style >= 2 && (pixel[0] != pixel[1] || pixel[1] != pixel[2]))
+                    throw new Exception($"{ClipboardImageEffects.Styles[style]} 灰度处理错误。");
+                if (style < 2 && pixel[0] == 32 && pixel[1] == 100 && pixel[2] == 240)
+                    throw new Exception($"{ClipboardImageEffects.Styles[style]} 没有改变像素。");
+                Console.WriteLine($"{ClipboardImageEffects.Styles[style]} 风格检查通过。");
+            }
+            var random = new Random(42);
+            byte[] noisyPixels = new byte[1200 * 800 * 4];
+            random.NextBytes(noisyPixels);
+            for (int i = 3; i < noisyPixels.Length; i += 4) noisyPixels[i] = 255;
+            var noisy = BitmapSource.Create(1200, 800, 96, 96, PixelFormats.Bgra32,
+                null, noisyPixels, 1200 * 4);
+            for (int size = 0; size < ClipboardImageEffects.Sizes.Length; size++)
+            {
+                (byte[] compressed, BitmapSource result) = ClipboardImageEffects.Compress(noisy, size);
+                if (compressed.Length > ClipboardImageEffects.SizeLimits[size] ||
+                    compressed.Length < 4 || compressed[0] != 0xFF || compressed[1] != 0xD8 ||
+                    result.PixelWidth <= 0 || result.PixelHeight <= 0)
+                    throw new Exception($"{ClipboardImageEffects.Sizes[size]} 压缩检查失败。");
+                Console.WriteLine($"{ClipboardImageEffects.Sizes[size]} 压缩检查通过：{compressed.Length} 字节，{result.PixelWidth}×{result.PixelHeight}");
             }
             return;
         }
@@ -100,5 +154,13 @@ internal static class Program
         };
         timer.Start();
         app.Run();
+    }
+
+    private static void VerifyImageClipboard(string path, string extension)
+    {
+        if (!File.Exists(path) || Path.GetExtension(path) != extension ||
+            !System.Windows.Clipboard.ContainsImage() || !System.Windows.Clipboard.ContainsFileDropList() ||
+            !System.Windows.Clipboard.GetFileDropList().Cast<string>().Contains(path))
+            throw new Exception($"剪贴板图片或文件缺失：{path}");
     }
 }

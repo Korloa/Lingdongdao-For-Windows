@@ -5,15 +5,15 @@
              FontFamily="Microsoft YaHei UI" FontSize="13">
     <StackPanel>
         <Grid>
-            <TextBlock Text="{Binding Label, ElementName=Root}" Foreground="#DCE2ED"
+            <TextBlock Text="{Binding Label, ElementName=Root}" Foreground="#D9E5E1"
                        VerticalAlignment="Center"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <TextBox x:Name="ValueBox" Width="55" Height="27" TextAlignment="Right"
                          VerticalContentAlignment="Center" Padding="4,0"
-                         Background="#262D3A" Foreground="#55E9AB" BorderBrush="#394354"
+                         Background="#132225" Foreground="#F4C58A" BorderBrush="#38504C"
                          BorderThickness="1" LostFocus="ValueBox_LostFocus"
                          PreviewKeyDown="ValueBox_PreviewKeyDown"/>
-                <TextBlock Text="{Binding Unit, ElementName=Root}" Foreground="#55E9AB"
+                <TextBlock Text="{Binding Unit, ElementName=Root}" Foreground="#F4C58A"
                            Width="40" Margin="5,0,0,0" VerticalAlignment="Center"/>
             </StackPanel>
         </Grid>

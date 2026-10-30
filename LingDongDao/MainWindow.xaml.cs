@@ -21,6 +21,8 @@ public partial class MainWindow : Window
 {
     private const int HotkeyId = 0x11D0;
     private const int ConvertHotkeyId = 0x11D1;
+    private const int StyleHotkeyId = 0x11D2;
+    private const int CompressHotkeyId = 0x11D3;
     private const int WmHotkey = 0x0312;
 
     private AppSettings _settings;
@@ -48,6 +50,10 @@ public partial class MainWindow : Window
     private bool _hoverExpanded;
     private bool _pickerOpen;
     private bool _convertHotkeyRegistered;
+    private bool _styleHotkeyRegistered;
+    private bool _compressHotkeyRegistered;
+    private PickerOperation _pickerOperation;
+    private double _pickerItemWidth;
     private int _pickerIndex = 1;
     private Button[] _formatButtons = [];
     private double _formatStep;
@@ -144,10 +150,17 @@ public partial class MainWindow : Window
                 _trayIcon.BalloonTipText = "快捷键被占用，请从托盘打开控制面板修改。";
                 _trayIcon.ShowBalloonTip(5000);
             }
-            if (!TrySetConversionHotkey(_settings.ImageConversionEnabled, out _))
+            var unavailableImageKeys = new List<string>();
+            if (!SetImageHotkey(ConvertHotkeyId, _settings.ImageConversionEnabled,
+                    ref _convertHotkeyRegistered, out _)) unavailableImageKeys.Add("Ctrl+0");
+            if (!SetImageHotkey(StyleHotkeyId, _settings.ImageStyleEnabled,
+                    ref _styleHotkeyRegistered, out _)) unavailableImageKeys.Add("Ctrl+1");
+            if (!SetImageHotkey(CompressHotkeyId, _settings.ImageCompressionEnabled,
+                    ref _compressHotkeyRegistered, out _)) unavailableImageKeys.Add("Ctrl+2");
+            if (unavailableImageKeys.Count > 0)
             {
-                _trayIcon.BalloonTipTitle = "图片转换快捷键不可用";
-                _trayIcon.BalloonTipText = "Ctrl+0 已被占用，无法打开图片格式选择。";
+                _trayIcon.BalloonTipTitle = "图片快捷键不可用";
+                _trayIcon.BalloonTipText = $"{string.Join("、", unavailableImageKeys)} 已被占用，请检查控制面板。";
                 _trayIcon.ShowBalloonTip(5000);
             }
         };
@@ -183,8 +196,10 @@ public partial class MainWindow : Window
             TrySetHotkey(oldHotkey, out _);
             return error;
         }
-        bool conversionChanged = candidate.ImageConversionEnabled != _settings.ImageConversionEnabled;
-        if (conversionChanged && !TrySetConversionHotkey(candidate.ImageConversionEnabled, out error))
+        bool imageHotkeysChanged = candidate.ImageConversionEnabled != _settings.ImageConversionEnabled ||
+                                   candidate.ImageStyleEnabled != _settings.ImageStyleEnabled ||
+                                   candidate.ImageCompressionEnabled != _settings.ImageCompressionEnabled;
+        if (imageHotkeysChanged && !TrySetImageHotkeys(candidate, out error))
         {
             if (startupChanged) StartupManager.TrySetEnabled(_settings.StartWithWindows, out _);
             TrySetHotkey(oldHotkey, out _);
@@ -193,7 +208,7 @@ public partial class MainWindow : Window
         try { SettingsStore.Save(candidate); }
         catch (Exception exception)
         {
-            if (conversionChanged) TrySetConversionHotkey(_settings.ImageConversionEnabled, out _);
+            if (imageHotkeysChanged) TrySetImageHotkeys(_settings, out _);
             if (startupChanged) StartupManager.TrySetEnabled(_settings.StartWithWindows, out _);
             TrySetHotkey(oldHotkey, out _);
             return $"保存设置失败：{exception.Message}";
@@ -202,7 +217,7 @@ public partial class MainWindow : Window
         bool batteryChanged = candidate.BatteryLowEnabled != _settings.BatteryLowEnabled ||
                               candidate.BatteryLowPercent != _settings.BatteryLowPercent;
         _settings = candidate;
-        if (!_settings.ImageConversionEnabled && _pickerOpen) ClosePicker();
+        if (_pickerOpen && !PickerEnabled(_pickerOperation)) ClosePicker();
         _previewSettings = null;
         ApplyVisualSettings();
         if (batteryChanged) _powerMonitor.RefreshSettings();
@@ -254,9 +269,9 @@ public partial class MainWindow : Window
         IconBadge.Width = IconBadge.Height = PreviewImageFrame.Width = PreviewImageFrame.Height = visual.IconSize;
         IconBadge.CornerRadius = new CornerRadius(visual.IconSize / 2);
         PreviewImageFrame.Tag = new CornerRadius(Math.Min(visual.ImageCornerRadius, visual.IconSize / 2));
-        IdleHoverTarget.Width = visual.LineWidth + 18;
-        IdleHoverTarget.Height = Math.Max(18, visual.LineThickness + 12);
-        IdleHoverTarget.Margin = new Thickness(0, Math.Max(0, visual.TopOffset - 4), 0, 0);
+        IdleHoverTarget.Width = visual.LineWidth + visual.HoverHorizontalPadding * 2;
+        IdleHoverTarget.Height = visual.LineThickness + visual.HoverVerticalPadding;
+        IdleHoverTarget.Margin = new Thickness(0, Math.Max(0, visual.TopOffset - visual.HoverVerticalPadding / 2), 0, 0);
         NoticeIcon.Width = NoticeIcon.Height = visual.IconSize * 0.52;
         TitleText.FontSize = visual.TitleFontSize;
         DetailText.FontSize = visual.DetailFontSize;
@@ -317,7 +332,17 @@ public partial class MainWindow : Window
         }
         else if (message == WmHotkey && wParam.ToInt32() == ConvertHotkeyId)
         {
-            OpenFormatPicker();
+            OpenPicker(PickerOperation.Format);
+            handled = true;
+        }
+        else if (message == WmHotkey && wParam.ToInt32() == StyleHotkeyId)
+        {
+            OpenPicker(PickerOperation.Style);
+            handled = true;
+        }
+        else if (message == WmHotkey && wParam.ToInt32() == CompressHotkeyId)
+        {
+            OpenPicker(PickerOperation.Compress);
             handled = true;
         }
         return IntPtr.Zero;
@@ -352,22 +377,37 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private bool TrySetConversionHotkey(bool enabled, out string? error)
+    private bool TrySetImageHotkeys(AppSettings settings, out string? error)
+    {
+        bool oldFormat = _convertHotkeyRegistered, oldStyle = _styleHotkeyRegistered,
+            oldCompress = _compressHotkeyRegistered;
+        if (SetImageHotkey(ConvertHotkeyId, settings.ImageConversionEnabled, ref _convertHotkeyRegistered, out error) &&
+            SetImageHotkey(StyleHotkeyId, settings.ImageStyleEnabled, ref _styleHotkeyRegistered, out error) &&
+            SetImageHotkey(CompressHotkeyId, settings.ImageCompressionEnabled, ref _compressHotkeyRegistered, out error))
+            return true;
+        SetImageHotkey(ConvertHotkeyId, oldFormat, ref _convertHotkeyRegistered, out _);
+        SetImageHotkey(StyleHotkeyId, oldStyle, ref _styleHotkeyRegistered, out _);
+        SetImageHotkey(CompressHotkeyId, oldCompress, ref _compressHotkeyRegistered, out _);
+        return false;
+    }
+
+    private bool SetImageHotkey(int id, bool enabled, ref bool registered, out string? error)
     {
         error = null;
-        if (enabled == _convertHotkeyRegistered) return true;
+        if (enabled == registered) return true;
         if (!enabled)
         {
-            UnregisterHotKey(_hotkeyHandle, ConvertHotkeyId);
-            _convertHotkeyRegistered = false;
+            UnregisterHotKey(_hotkeyHandle, id);
+            registered = false;
             return true;
         }
-        if (RegisterHotKey(_hotkeyHandle, ConvertHotkeyId, 0x4000 | 0x0002, 0x30))
+        uint key = (uint)(0x30 + id - ConvertHotkeyId);
+        if (RegisterHotKey(_hotkeyHandle, id, 0x4000 | 0x0002, key))
         {
-            _convertHotkeyRegistered = true;
+            registered = true;
             return true;
         }
-        error = "Ctrl+0 已被其他程序占用，无法启用图片转换快捷键。";
+        error = $"Ctrl+{id - ConvertHotkeyId} 已被其他程序占用。";
         return false;
     }
 
@@ -548,16 +588,32 @@ public partial class MainWindow : Window
         else Collapse();
     }
 
-    private void OpenFormatPicker()
+    private enum PickerOperation { Format, Style, Compress }
+
+    private string[] PickerItems => _pickerOperation switch
     {
-        if (!_settings.ImageConversionEnabled || CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic)
+        PickerOperation.Style => ClipboardImageEffects.Styles,
+        PickerOperation.Compress => ClipboardImageEffects.Sizes,
+        _ => ClipboardImageConverter.Formats
+    };
+
+    private bool PickerEnabled(PickerOperation operation) => operation switch
+    {
+        PickerOperation.Style => _settings.ImageStyleEnabled,
+        PickerOperation.Compress => _settings.ImageCompressionEnabled,
+        _ => _settings.ImageConversionEnabled
+    };
+
+    private void OpenPicker(PickerOperation operation)
+    {
+        if (!PickerEnabled(operation) || CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic)
             return;
         try
         {
             BitmapSource? image = ClipboardMonitor.ReadCurrentImage();
             if (image is null)
             {
-                ShowNotice(new IslandNotice(NoticeKind.ClipboardImage, "先复制图片", "然后按 Ctrl+0 选择格式"));
+                ShowNotice(new IslandNotice(NoticeKind.ClipboardImage, "先复制图片", $"然后按 Ctrl+{(int)operation} 打开选择条"));
                 return;
             }
 
@@ -565,12 +621,25 @@ public partial class MainWindow : Window
             CancelFormatMovement();
             _pickerOpen = false;
             _pickerImage = image;
-            _pickerIndex = 1;
-            ShowNoticeCore(new IslandNotice(NoticeKind.ClipboardImage, "转换图片", "选择格式", image), true);
+            _pickerOperation = operation;
+            _pickerIndex = operation == PickerOperation.Format ? 1 : 0;
+            string title = operation switch
+            {
+                PickerOperation.Style => "调整风格",
+                PickerOperation.Compress => "压缩图片",
+                _ => "转换图片"
+            };
+            ShowNoticeCore(new IslandNotice(NoticeKind.ClipboardImage, title, "选择图片操作", image), true);
             _pickerOpen = true;
             ContentText.Visibility = Visibility.Collapsed;
             FormatPicker.Visibility = Visibility.Visible;
-            PickerHint.Text = "选择格式 · A/D 或滚轮";
+            PickerHint.Text = operation switch
+            {
+                PickerOperation.Style => "调整风格 · A/D 或滚轮",
+                PickerOperation.Compress => "压缩大小 · A/D 或滚轮",
+                _ => "选择格式 · A/D 或滚轮"
+            };
+            UpdateFormatCarouselLayout();
             RenderFormatButtons();
             SetFormatRestPosition();
             _closeTimer.Stop();
@@ -611,13 +680,20 @@ public partial class MainWindow : Window
     {
         CancelFormatMovement();
         AppSettings visual = CurrentVisualSettings;
-        _formatStep = visual.FormatItemWidth + visual.FormatSpacing;
-        FormatViewport.Width = visual.FormatVisibleItems * _formatStep;
+        _pickerItemWidth = _pickerOperation switch
+        {
+            PickerOperation.Style => visual.FormatItemWidth + 16,
+            PickerOperation.Compress => visual.FormatItemWidth + 24,
+            _ => visual.FormatItemWidth
+        };
+        _formatStep = _pickerItemWidth + visual.FormatSpacing;
+        int visible = _pickerOperation == PickerOperation.Format ? visual.FormatVisibleItems : 3;
+        FormatViewport.Width = visible * _formatStep;
         FormatTrack.Width = _formatButtons.Length * _formatStep;
         for (int slot = 0; slot < _formatButtons.Length; slot++)
         {
             Button button = _formatButtons[slot];
-            button.Width = visual.FormatItemWidth;
+            button.Width = _pickerItemWidth;
             button.FontSize = visual.FormatFontSize;
             Canvas.SetLeft(button, slot * _formatStep);
             Canvas.SetTop(button, 0);
@@ -630,14 +706,15 @@ public partial class MainWindow : Window
     {
         if (_formatButtons.Length == 0) return;
         AppSettings visual = CurrentVisualSettings;
-        int count = ClipboardImageConverter.Formats.Length;
+        string[] items = PickerItems;
+        int count = items.Length;
         for (int slot = 0; slot < _formatButtons.Length; slot++)
         {
             Button button = _formatButtons[slot];
             int index = (_pickerIndex + slot - 3 + count * 2) % count;
             bool selected = slot == 3;
             button.Tag = index;
-            button.Content = ClipboardImageConverter.Formats[index];
+            button.Content = items[index];
             button.FontWeight = FontWeights.Normal;
             button.BeginAnimation(Button.FontSizeProperty, null);
             button.FontSize = selected ? visual.FormatSelectedFontSize : visual.FormatFontSize;
@@ -663,7 +740,7 @@ public partial class MainWindow : Window
         if (_formatMoving || _formatStep <= 0) return;
         double viewportWidth = FormatViewport.ActualWidth > 0
             ? FormatViewport.ActualWidth : FormatViewport.Width;
-        _formatRestX = viewportWidth / 2 - (3 * _formatStep + CurrentVisualSettings.FormatItemWidth / 2);
+        _formatRestX = viewportWidth / 2 - (3 * _formatStep + _pickerItemWidth / 2);
         FormatShift.BeginAnimation(TranslateTransform.XProperty, null);
         FormatShift.X = _formatRestX;
     }
@@ -693,7 +770,7 @@ public partial class MainWindow : Window
         scroll.Completed += (_, _) =>
         {
             if (!_pickerOpen || token != _formatAnimationToken) return;
-            int count = ClipboardImageConverter.Formats.Length;
+            int count = PickerItems.Length;
             _pickerIndex = (_pickerIndex + direction + count) % count;
             _formatMoving = false;
             RenderFormatButtons();
@@ -701,7 +778,7 @@ public partial class MainWindow : Window
             if (_convertAfterMove)
             {
                 _convertAfterMove = false;
-                ConvertSelectedFormat(_pickerIndex);
+                ApplyPickerSelection(_pickerIndex);
             }
         };
         FormatShift.BeginAnimation(TranslateTransform.XProperty, scroll);
@@ -740,7 +817,7 @@ public partial class MainWindow : Window
                 break;
             case Key.Enter:
                 if (_formatMoving) _convertAfterMove = true;
-                else ConvertSelectedFormat(_pickerIndex);
+                else ApplyPickerSelection(_pickerIndex);
                 e.Handled = true;
                 break;
             case Key.Escape:
@@ -754,26 +831,42 @@ public partial class MainWindow : Window
     {
         if (!_pickerOpen || _formatMoving || sender is not Button button || button.Tag is not int index)
             return;
-        ConvertSelectedFormat(index);
+        ApplyPickerSelection(index);
     }
 
-    private void ConvertSelectedFormat(int index)
+    private void ApplyPickerSelection(int index)
     {
         if (!_pickerOpen || _pickerImage is null) return;
-        string format = ClipboardImageConverter.Formats[index];
+        string item = PickerItems[index];
         try
         {
             _ignoreIslandClickUntilUtc = DateTime.UtcNow.AddMilliseconds(500);
-            ClipboardImageConverter.ConvertAndCopy(_pickerImage, format,
-                _clipboardMonitor.SuppressNextUpdate);
+            string detail;
+            if (_pickerOperation == PickerOperation.Style)
+            {
+                ClipboardImageEffects.ApplyStyleAndCopy(_pickerImage, index, _clipboardMonitor.SuppressNextUpdate);
+                detail = $"已应用{item}风格 · PNG 可粘贴";
+            }
+            else if (_pickerOperation == PickerOperation.Compress)
+            {
+                var compressed = ClipboardImageEffects.CompressAndCopy(_pickerImage, index,
+                    _clipboardMonitor.SuppressNextUpdate);
+                detail = $"{ClipboardImageEffects.SizeDescriptions[index]} 档 · 实际 {compressed.Bytes / 1024.0:0.#} KB";
+            }
+            else
+            {
+                ClipboardImageConverter.ConvertAndCopy(_pickerImage, item,
+                    _clipboardMonitor.SuppressNextUpdate);
+                detail = $"已转换为 {item} · 可粘贴";
+            }
             ClosePicker(showPrevious: false);
             ShowNoticeCore(new IslandNotice(NoticeKind.ImageConverted,
-                $"{format} 复制成功", $"已转换为 {format} · 可粘贴"), false);
+                $"{(_pickerOperation == PickerOperation.Compress ? ClipboardImageEffects.SizeDescriptions[index] : item)} 复制成功", detail), false);
         }
         catch (Exception exception)
         {
             _clipboardMonitor.ClearSuppression();
-            PickerHint.Text = $"转换失败：{exception.Message}";
+            PickerHint.Text = $"处理失败：{exception.Message}";
         }
     }
 
@@ -926,6 +1019,8 @@ public partial class MainWindow : Window
         _closeTimer.Stop();
         if (_registeredHotkey is not null) UnregisterHotKey(_hotkeyHandle, HotkeyId);
         if (_convertHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, ConvertHotkeyId);
+        if (_styleHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, StyleHotkeyId);
+        if (_compressHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, CompressHotkeyId);
         _hotkeySource?.RemoveHook(HotkeyWndProc);
         _settingsWindow?.Close();
         _clipboardMonitor.Dispose();

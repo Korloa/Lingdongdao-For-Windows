@@ -43,6 +43,8 @@ public partial class SettingsWindow : Window
         AnimationSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.AnimationMilliseconds);
         DurationSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.NoticeSeconds);
         HoverExpandCheck.IsChecked = _working.HoverExpandEnabled;
+        HoverHorizontalSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.HoverHorizontalPadding);
+        HoverVerticalSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.HoverVerticalPadding);
         ImageCornerRadiusSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.ImageCornerRadius);
         ImagePreviewSizeSlider.SetCurrentValue(SettingSlider.ValueProperty, _working.ImagePreviewSize);
         FormatVisibleItemsSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)_working.FormatVisibleItems);
@@ -91,6 +93,8 @@ public partial class SettingsWindow : Window
         _working.AnimationMilliseconds = AnimationSlider.Value;
         _working.NoticeSeconds = DurationSlider.Value;
         _working.HoverExpandEnabled = HoverExpandCheck.IsChecked == true;
+        _working.HoverHorizontalPadding = HoverHorizontalSlider.Value;
+        _working.HoverVerticalPadding = HoverVerticalSlider.Value;
         _working.ImageCornerRadius = ImageCornerRadiusSlider.Value;
         _working.ImagePreviewSize = ImagePreviewSizeSlider.Value;
         _working.FormatVisibleItems = (int)FormatVisibleItemsSlider.Value;
@@ -129,6 +133,12 @@ public partial class SettingsWindow : Window
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void Navigate_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button { Tag: string anchor }) return;
+        if (FindName(anchor) is FrameworkElement section) section.BringIntoView();
+    }
 
     protected override void OnClosed(EventArgs e)
     {
