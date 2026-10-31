@@ -14,7 +14,7 @@ internal enum MusicControl { Previous, Toggle, Next }
 internal sealed class MusicMonitor : IDisposable
 {
     private readonly Func<AppSettings> _settings;
-    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
     private GlobalSystemMediaTransportControlsSession? _activeSession;
     private readonly MusicFallbackReader _fallback = new();

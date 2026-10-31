@@ -37,7 +37,7 @@ internal sealed class MusicFallbackReader
             {
                 string? title = PlayerWindowTitles.Find(process.Id, "酷狗音乐");
                 var track = _kugouTrack.Resolve(title);
-                if (track is null && _lastKugouTrack is { } recent &&
+                if (title is null && track is null && _lastKugouTrack is { } recent &&
                     recent.ProcessId == process.Id &&
                     DateTime.UtcNow - recent.SeenUtc < TimeSpan.FromSeconds(12))
                     track = (recent.Artist, recent.Title);
@@ -81,10 +81,14 @@ internal sealed class MusicFallbackReader
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         string title = raw.Trim();
-        // The player scrolls its caption, so text can follow the brand suffix.
+        // KuGou rotates the entire caption: the characters after the brand are
+        // the beginning of the artist/title that was clipped from the front.
         int suffix = title.IndexOf(" - 酷狗音乐", StringComparison.Ordinal);
         if (suffix < 0) return null;
-        title = title[..suffix].Trim();
+        string beforeBrand = title[..suffix];
+        string afterBrand = title[(suffix + " - 酷狗音乐".Length)..];
+        if (afterBrand.StartsWith(' ')) afterBrand = afterBrand[1..];
+        title = (afterBrand + beforeBrand).Trim();
         if (title.Length == 0) return null;
         // KuGou also names its desktop lyrics window "桌面歌词 - 酷狗音乐".
         // Only the player window has the "artist - song - 酷狗音乐" shape.
@@ -198,8 +202,7 @@ internal sealed class KugouTrackReader
 {
     private readonly string _iniPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "KuGou8", "KuGou.ini");
-    private string? _mismatch;
-    private DateTime _mismatchSinceUtc;
+    private (string Artist, string Title)? _lastResolved;
 
     public (string Artist, string Title)? Resolve(string? windowTitle)
     {
@@ -208,33 +211,34 @@ internal sealed class KugouTrackReader
             windowTitle.StartsWith("桌面歌词", StringComparison.Ordinal) ||
             windowTitle.StartsWith("桌面音乐", StringComparison.Ordinal)) return null;
         var windowTrack = MusicFallbackReader.ParseKugouTitle(windowTitle);
-        if (!File.Exists(_iniPath)) return windowTrack;
+        if (windowTrack is null) return null;
+        if (!File.Exists(_iniPath)) return Remember(windowTrack.Value);
         var value = new StringBuilder(512);
         if (GetPrivateProfileString("PlaybackState", "LastPlayingTitleName", "",
-                value, (uint)value.Capacity, _iniPath) == 0) return windowTrack;
+                value, (uint)value.Capacity, _iniPath) == 0) return Remember(windowTrack.Value);
         string stored = value.ToString().Trim();
         int separator = stored.IndexOf(" - ", StringComparison.Ordinal);
-        if (separator <= 0 || separator + 3 >= stored.Length) return windowTrack;
+        if (separator <= 0 || separator + 3 >= stored.Length) return Remember(windowTrack.Value);
         var full = (Artist: stored[..separator].Trim(), Title: stored[(separator + 3)..].Trim());
-        // A saved title can lag behind the actual player; require the moving
-        // caption to contain a recognizable part of the same song.
-        if (windowTrack is null) return full;
-        if (windowTrack.Value.Title.Length >= 3 &&
-            full.Title.Contains(windowTrack.Value.Title, StringComparison.OrdinalIgnoreCase))
-        {
-            _mismatch = null;
-            return full;
-        }
-        string mismatch = windowTrack.Value.Artist + "|" + windowTrack.Value.Title;
-        if (_mismatch != mismatch)
-        {
-            _mismatch = mismatch;
-            _mismatchSinceUtc = DateTime.UtcNow;
-        }
-        if (DateTime.UtcNow - _mismatchSinceUtc < TimeSpan.FromSeconds(3))
-            return null; // Wait for KuGou.ini to catch up instead of showing a clipped artist.
-        return windowTrack;
+        // KuGou.ini may lag a track switch by about 30 seconds. The rotating
+        // window caption is live, so never wait for the saved title to catch up.
+        if (SameTrack(full, windowTrack.Value)) return Remember(full);
+        if (_lastResolved is { } recent && SameTrack(recent, windowTrack.Value)) return recent;
+        return Remember(windowTrack.Value);
     }
+
+    private (string Artist, string Title) Remember((string Artist, string Title) track)
+    {
+        _lastResolved = track;
+        return track;
+    }
+
+    private static bool SameTrack((string Artist, string Title) a, (string Artist, string Title) b) =>
+        string.Equals(WithoutSpaces(a.Artist), WithoutSpaces(b.Artist), StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(WithoutSpaces(a.Title), WithoutSpaces(b.Title), StringComparison.OrdinalIgnoreCase);
+
+    private static string WithoutSpaces(string value) =>
+        string.Concat(value.Where(character => !char.IsWhiteSpace(character)));
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern uint GetPrivateProfileString(string section, string key,

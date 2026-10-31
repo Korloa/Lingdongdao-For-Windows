@@ -212,6 +212,36 @@ internal static class Program
             Console.WriteLine("发声 PID：" + string.Join(",", MusicFallbackReader.AudibleProcessIds()));
             return;
         }
+        if (args.Contains("--kugou-switch-latency"))
+        {
+            using var player = System.Diagnostics.Process.GetProcessesByName("KuGou")
+                .FirstOrDefault(item => PlayerWindowTitles.FindKugouPlayerHandle(item.Id) != IntPtr.Zero);
+            if (player is null) throw new Exception("找不到酷狗主窗口");
+            string ini = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "KuGou8", "KuGou.ini");
+            var reader = new MusicFallbackReader();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            string previous = "";
+            void Sample()
+            {
+                string stored = File.Exists(ini) ? File.ReadAllLines(ini, System.Text.Encoding.Unicode)
+                    .FirstOrDefault(line => line.StartsWith("LastPlayingTitleName=", StringComparison.Ordinal)) ?? "无" : "无";
+                MusicSnapshot? snapshot = reader.Read();
+                string state = $"配置={stored} | 卡片={snapshot?.Source}: {snapshot?.Artist} / {snapshot?.Title}";
+                if (state == previous) return;
+                previous = state;
+                Console.WriteLine($"{watch.Elapsed.TotalSeconds,5:0.0}s {state}");
+            }
+            Sample();
+            bool sent = PlayerTransport.TrySend("KuGou.exe", MusicControl.Next);
+            Console.WriteLine($"{watch.Elapsed.TotalSeconds,5:0.0}s 下一首发送={sent} {PlayerTransport.LastStatus}");
+            while (watch.Elapsed < TimeSpan.FromSeconds(12))
+            {
+                Thread.Sleep(250);
+                Sample();
+            }
+            return;
+        }
         if (args.Contains("--kugou-progress-live"))
         {
             using var process = System.Diagnostics.Process.GetProcessesByName("KuGou")
@@ -280,8 +310,10 @@ internal static class Program
                 throw new Exception("酷狗进度文本解析错误");
             var track = MusicFallbackReader.ParseKugouTitle("歌手 - 歌名 - 酷狗音乐");
             var scrolling = MusicFallbackReader.ParseKugouTitle("ey Inspired - Taking Off - 酷狗音乐 Lak");
+            var rotated = MusicFallbackReader.ParseKugouTitle("ong - 酷狗音乐 Artist - S");
             if (track != ("歌手", "歌名") ||
-                scrolling != ("ey Inspired", "Taking Off") ||
+                scrolling != ("Lakey Inspired", "Taking Off") ||
+                rotated != ("Artist", "Song") ||
                 MusicFallbackReader.ParseKugouTitle("酷狗音乐") is not null ||
                 MusicFallbackReader.ParseKugouTitle("桌面歌词 - 酷狗音乐") is not null ||
                 MusicFallbackReader.ParseKugouTitle("别的播放器") is not null)
