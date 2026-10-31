@@ -17,6 +17,10 @@ internal sealed class KugouProgressReader
     private int _processId;
     private string? _track;
     private DateTime _lastScanUtc;
+    public DateTime LastGrowthUtc { get; private set; } = DateTime.MinValue;
+    private Task<List<long>>? _scanTask;
+    private int _scanProcessId;
+    private string? _scanTrack;
 
     public (TimeSpan Position, TimeSpan Duration) Read(int processId, string track)
     {
@@ -28,11 +32,21 @@ internal sealed class KugouProgressReader
             _active.Clear();
             _lastPositions.Clear();
             _lastScanUtc = DateTime.MinValue;
+            LastGrowthUtc = DateTime.MinValue;
         }
-        if (_candidates.Count == 0 && DateTime.UtcNow - _lastScanUtc > TimeSpan.FromSeconds(10))
+        if (_scanTask?.IsCompleted == true)
+        {
+            if (_scanProcessId == processId && _scanTrack == track && _scanTask.IsCompletedSuccessfully)
+                _candidates.AddRange(_scanTask.Result);
+            _scanTask = null;
+        }
+        if (_candidates.Count == 0 && _scanTask is null &&
+            DateTime.UtcNow - _lastScanUtc > TimeSpan.FromSeconds(30))
         {
             _lastScanUtc = DateTime.UtcNow;
-            _candidates.AddRange(Scan(processId));
+            _scanProcessId = processId;
+            _scanTrack = track;
+            _scanTask = Task.Run(() => Scan(processId));
         }
         if (_candidates.Count == 0) return default;
         IntPtr handle = OpenProcess(ProcessVmRead, false, processId);
@@ -64,6 +78,7 @@ internal sealed class KugouProgressReader
             }
             if (growing.Count > 0)
             {
+                LastGrowthUtc = DateTime.UtcNow;
                 _active.Clear();
                 foreach (var reading in growing) _active.Add(reading.Address);
             }

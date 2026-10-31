@@ -198,6 +198,32 @@ internal static class Program
             Console.WriteLine($"卡片：{(snapshot is null ? "无" : snapshot.PlayerName + " · " + snapshot.Title)}");
             return;
         }
+        if (args.Contains("--kugou-title-probe"))
+        {
+            foreach (var process in System.Diagnostics.Process.GetProcessesByName("KuGou"))
+            {
+                using (process)
+                {
+                    string? title = PlayerWindowTitles.Find(process.Id, "酷狗音乐");
+                    var track = new KugouTrackReader().Resolve(title);
+                    Console.WriteLine($"酷狗 PID={process.Id} 窗口={title ?? "无"} 歌曲={track?.Artist} / {track?.Title}");
+                }
+            }
+            Console.WriteLine("发声 PID：" + string.Join(",", MusicFallbackReader.AudibleProcessIds()));
+            return;
+        }
+        if (args.Contains("--kugou-progress-live"))
+        {
+            using var process = System.Diagnostics.Process.GetProcessesByName("KuGou")
+                .FirstOrDefault(item => PlayerWindowTitles.FindKugouPlayerHandle(item.Id) != IntPtr.Zero);
+            if (process is null) throw new Exception("找不到酷狗主窗口");
+            var reader = new KugouProgressReader();
+            var first = Task.Run(() => reader.Read(process.Id, "live")).GetAwaiter().GetResult();
+            Thread.Sleep(3000);
+            var second = Task.Run(() => reader.Read(process.Id, "live")).GetAwaiter().GetResult();
+            Console.WriteLine($"酷狗进度：{first.Position}/{first.Duration} -> {second.Position}/{second.Duration}");
+            return;
+        }
         if (args.Contains("--netease-probe"))
         {
             var reader = new NetEasePlaybackReader();
@@ -230,6 +256,20 @@ internal static class Program
             Console.WriteLine($"控制发送：{sent} · {command}");
             return;
         }
+        if (args.Contains("--kugou-control-live"))
+        {
+            int index = Array.IndexOf(args, "--kugou-control-live");
+            MusicControl command = index + 1 < args.Length ? args[index + 1].ToLowerInvariant() switch
+            {
+                "previous" => MusicControl.Previous,
+                "toggle" => MusicControl.Toggle,
+                "next" => MusicControl.Next,
+                _ => throw new ArgumentException("Use previous, toggle, or next.")
+            } : throw new ArgumentException("Missing music command.");
+            bool sent = PlayerTransport.TrySend("KuGou.exe", command);
+            Console.WriteLine($"酷狗控制发送：{sent} · {command} · {PlayerTransport.LastStatus}");
+            return;
+        }
         if (args.Contains("--music-self-test"))
         {
             byte[] timeline = System.Text.Encoding.Unicode.GetBytes("1:23/4:56\0");
@@ -239,8 +279,11 @@ internal static class Program
                     out _, out _))
                 throw new Exception("酷狗进度文本解析错误");
             var track = MusicFallbackReader.ParseKugouTitle("歌手 - 歌名 - 酷狗音乐");
+            var scrolling = MusicFallbackReader.ParseKugouTitle("ey Inspired - Taking Off - 酷狗音乐 Lak");
             if (track != ("歌手", "歌名") ||
+                scrolling != ("ey Inspired", "Taking Off") ||
                 MusicFallbackReader.ParseKugouTitle("酷狗音乐") is not null ||
+                MusicFallbackReader.ParseKugouTitle("桌面歌词 - 酷狗音乐") is not null ||
                 MusicFallbackReader.ParseKugouTitle("别的播放器") is not null)
                 throw new Exception("酷狗窗口标题识别错误");
             byte[] bytes = [0, 1, 2, 1, 9, 3];

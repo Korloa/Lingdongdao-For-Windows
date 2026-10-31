@@ -59,8 +59,26 @@ internal sealed class MusicMonitor : IDisposable
             catch (Exception) { _activeSession = null; }
         }
         bool sent = await Task.Run(() => PlayerTransport.TrySend(current.Source, command));
-        if (sent) _ = CheckAsync();
-        return sent;
+        if (!sent) return false;
+        if (!current.Source.Contains("kugou", StringComparison.OrdinalIgnoreCase))
+        {
+            _ = CheckAsync();
+            return true;
+        }
+        for (int attempt = 0; attempt < 6; attempt++)
+        {
+            await Task.Delay(400);
+            await CheckAsync();
+            MusicSnapshot? updated = _current;
+            if (updated is null) continue;
+            bool samePlayer = updated.Source.Contains("kugou", StringComparison.OrdinalIgnoreCase);
+            if (command == MusicControl.Toggle && samePlayer &&
+                updated.IsPlaying != current.IsPlaying) return true;
+            if (command != MusicControl.Toggle && samePlayer &&
+                (updated.Title != current.Title || updated.Artist != current.Artist ||
+                 updated.Position + TimeSpan.FromSeconds(5) < current.Position)) return true;
+        }
+        return false;
     }
 
     public async Task<bool> SeekAsync(TimeSpan position)

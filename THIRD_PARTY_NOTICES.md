@@ -27,6 +27,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+The KuGou background control button mapping was informed by the experimental
+KugouControlPoc project (no source code from that project is included):
+https://github.com/Enkianssus/AwooMusicBot/tree/main/experiments/kugou-control-poc
+
 Audio session inspection uses NAudio.Wasapi 3.3.0:
 https://github.com/naudio/NAudio
 
