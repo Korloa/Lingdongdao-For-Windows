@@ -49,7 +49,6 @@ public partial class MainWindow : Window
     private readonly Dictionary<int, string> _registeredHotkeys = new();
     private IslandNotice? _musicNotice;
     private MusicSnapshot? _musicSnapshot;
-    private bool _isPersistentMusicNotice;
     private BitmapSource? _pickerImage;
     private BitmapSource? _imagePreviewSource;
     private string? _imagePreviewPath;
@@ -127,7 +126,7 @@ public partial class MainWindow : Window
             if (_imageEditing || DateTime.UtcNow < _imageZoomHoldUntilUtc ||
                 PreviewImageFrame.IsMouseOver || ImageHoverPanel.IsMouseOver) return;
             HideImagePreview();
-            if (_isOpen && !_pickerOpen && !_isPersistentMusicNotice &&
+            if (_isOpen && !_pickerOpen && !_hoverExpanded &&
                 CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
                 _closeTimer.Start();
         };
@@ -258,9 +257,6 @@ public partial class MainWindow : Window
         _statusMonitor.RefreshSettings();
         _weatherMonitor.RefreshSettings();
         _musicMonitor.RefreshSettings();
-        if (candidate.DisplayMode == IslandDisplayMode.Automatic && _musicSnapshot?.IsPlaying == true &&
-            _musicNotice is not null && !_pickerOpen)
-            ShowNoticeCore(_musicNotice, false);
         return null;
     }
 
@@ -277,9 +273,6 @@ public partial class MainWindow : Window
     {
         _previewSettings = null;
         ApplyVisualSettings();
-        if (_musicSnapshot?.IsPlaying == true && _musicNotice is not null &&
-            CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic && !_pickerOpen)
-            ShowNoticeCore(_musicNotice, false);
     }
 
     private void ApplyVisualSettings()
@@ -346,7 +339,7 @@ public partial class MainWindow : Window
                 Animate(Island, HeightProperty, visual.IslandHeight);
                 AnimateColor(IslandBrush, ExpandedBackground(visual));
                 _closeTimer.Stop();
-                if (!_pickerOpen && !_isPersistentMusicNotice) _closeTimer.Start();
+                if (!_pickerOpen && !_hoverExpanded) _closeTimer.Start();
             }
             else
             {
@@ -527,7 +520,7 @@ public partial class MainWindow : Window
             CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
 
         PowerSnapshot power = _powerMonitor.Current;
-        IslandNotice notice = _musicSnapshot is { IsPlaying: false } && _musicNotice is not null
+        IslandNotice notice = _musicSnapshot is not null && _musicNotice is not null
             ? _musicNotice : power.HasBattery
             ? new IslandNotice(NoticeKind.Charging,
                 power.IsPluggedIn ? "正在充电" : "电池状态",
@@ -968,17 +961,22 @@ public partial class MainWindow : Window
     private void OnMusicUpdated(MusicSnapshot snapshot)
     {
         MusicSnapshot? previous = _musicSnapshot;
-        bool changed = previous is null || previous.Source != snapshot.Source ||
-                       previous.Title != snapshot.Title || previous.Artist != snapshot.Artist ||
-                       previous.IsPlaying != snapshot.IsPlaying;
+        bool trackChanged = previous is null || previous.Source != snapshot.Source ||
+                            previous.Title != snapshot.Title;
+        bool detailsChanged = trackChanged || previous?.Artist != snapshot.Artist;
         _musicSnapshot = snapshot;
         UpdateMusicProgress();
-        if (!changed) return;
+        if (!detailsChanged) return;
         string detail = string.IsNullOrEmpty(snapshot.Artist)
             ? snapshot.PlayerName : $"{snapshot.PlayerName} · {snapshot.Artist}";
         _musicNotice = new IslandNotice(NoticeKind.Music, snapshot.Title, detail);
-        if (!_pickerOpen && !_imageEditing && (snapshot.IsPlaying || previous?.IsPlaying == true) &&
-            (!_isOpen || _currentKind == NoticeKind.Music))
+        if (_isOpen && _currentKind == NoticeKind.Music)
+        {
+            TitleText.Text = snapshot.Title;
+            DetailText.Text = detail;
+        }
+        if (trackChanged && snapshot.IsPlaying && !_pickerOpen && !_imageEditing &&
+            !_hoverExpanded && (!_isOpen || _currentKind == NoticeKind.Music))
             ShowNoticeCore(_musicNotice, false);
     }
 
@@ -992,10 +990,7 @@ public partial class MainWindow : Window
     private void EndTemporaryNotice()
     {
         if (_pickerOpen || _imageEditing) return;
-        if (_musicSnapshot?.IsPlaying == true && _musicNotice is not null &&
-            CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
-            ShowNoticeCore(_musicNotice, false);
-        else Collapse();
+        Collapse();
     }
 
     private void UpdateMusicProgress()
@@ -1387,7 +1382,6 @@ public partial class MainWindow : Window
         HideImagePreview();
         _closeTimer.Stop();
         _hoverExpanded = false;
-        _isPersistentMusicNotice = ReferenceEquals(notice, _musicNotice) && _musicSnapshot?.IsPlaying == true;
         ContentText.Visibility = Visibility.Visible;
         FormatPicker.Visibility = Visibility.Collapsed;
         _currentKind = notice.Kind;
@@ -1421,7 +1415,7 @@ public partial class MainWindow : Window
             AnimateShadow(0.46);
             Animate(ExpandedContent, OpacityProperty, 1);
         }
-        if (!preview && !_isPersistentMusicNotice)
+        if (!preview)
         {
             _closeTimer.Interval = TimeSpan.FromSeconds(CurrentVisualSettings.NoticeSeconds);
             _closeTimer.Start();
@@ -1439,7 +1433,6 @@ public partial class MainWindow : Window
         _hoverExpanded = false;
         _imagePreviewSource = null;
         _imagePreviewPath = null;
-        _isPersistentMusicNotice = false;
         IdleHoverTarget.Visibility = CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic &&
                                      CurrentVisualSettings.HoverExpandEnabled
             ? Visibility.Visible : Visibility.Collapsed;
