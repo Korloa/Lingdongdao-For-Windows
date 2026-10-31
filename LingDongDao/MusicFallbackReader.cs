@@ -9,6 +9,7 @@ namespace LingDongDao;
 internal sealed class MusicFallbackReader
 {
     private readonly NetEasePlaybackReader _netEase = new();
+    private readonly KugouProgressReader _kugouProgress = new();
     private readonly Dictionary<int, DateTime> _lastKugouAudio = new();
 
     public string StatusText { get; private set; } = "未检查播放器";
@@ -17,9 +18,9 @@ internal sealed class MusicFallbackReader
     {
         // Native playback status is available even when the player does not publish SMTC.
         MusicSnapshot? netEase = _netEase.Read();
-        if (netEase is not null)
+        if (netEase?.IsPlaying == true)
         {
-            StatusText = $"网易云本地播放状态：{netEase.Title}";
+            StatusText = netEase.IsPlaying ? $"网易云本地播放状态：{netEase.Title}" : "网易云已暂停";
             return netEase;
         }
 
@@ -28,8 +29,8 @@ internal sealed class MusicFallbackReader
         {
             if (kugou.Length == 0)
             {
-                StatusText = _netEase.StatusText;
-                return null;
+                StatusText = netEase is null ? _netEase.StatusText : "网易云已暂停";
+                return netEase;
             }
 
             HashSet<int> audible = AudibleProcessIds();
@@ -39,13 +40,15 @@ internal sealed class MusicFallbackReader
                 var track = ParseKugouTitle(title);
                 if (track is null) continue;
                 if (audible.Contains(process.Id)) _lastKugouAudio[process.Id] = DateTime.UtcNow;
-                if (!_lastKugouAudio.TryGetValue(process.Id, out DateTime lastAudio) ||
-                    DateTime.UtcNow - lastAudio > TimeSpan.FromSeconds(5)) continue;
-                StatusText = $"酷狗本地音频：{track.Value.Title}";
-                return new MusicSnapshot("KuGou.exe", track.Value.Title, track.Value.Artist);
+                bool playing = _lastKugouAudio.TryGetValue(process.Id, out DateTime lastAudio) &&
+                               DateTime.UtcNow - lastAudio <= TimeSpan.FromSeconds(5);
+                StatusText = playing ? $"酷狗本地音频：{track.Value.Title}" : "酷狗已暂停";
+                var progress = _kugouProgress.Read(process.Id, track.Value.Artist + "|" + track.Value.Title);
+                return new MusicSnapshot("KuGou.exe", track.Value.Title, track.Value.Artist,
+                    playing, progress.Position, progress.Duration);
             }
-            StatusText = "酷狗已运行，未检测到正在发声的歌曲";
-            return null;
+            StatusText = netEase is null ? "酷狗已运行，未检测到正在发声的歌曲" : "网易云已暂停";
+            return netEase;
         }
         finally
         {

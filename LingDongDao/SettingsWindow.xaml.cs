@@ -1,4 +1,6 @@
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 
 namespace LingDongDao;
 
@@ -20,8 +22,7 @@ public partial class SettingsWindow : Window
         _cancelPreview = cancelPreview;
         _working = current.Clone();
         DataContext = _working;
-        HotkeyCombo.ItemsSource = GlobalHotkey.Options;
-        HotkeyCombo.SelectedItem = _working.Hotkey;
+        SetHotkeyValues();
         SetAppearanceValues();
         SetModeSelection();
         Loaded += (_, _) => _ready = true;
@@ -61,6 +62,43 @@ public partial class SettingsWindow : Window
         AutomaticMode.IsChecked = _working.DisplayMode == IslandDisplayMode.Automatic;
         ExpandedMode.IsChecked = _working.DisplayMode == IslandDisplayMode.Expanded;
         HiddenMode.IsChecked = _working.DisplayMode == IslandDisplayMode.Hidden;
+    }
+
+    private void SetHotkeyValues()
+    {
+        PanelHotkeyBox.Text = _working.Hotkey;
+        FormatHotkeyBox.Text = _working.ImageFormatHotkey;
+        StyleHotkeyBox.Text = _working.ImageStyleHotkey;
+        CompressHotkeyBox.Text = _working.ImageCompressHotkey;
+    }
+
+    internal void SyncStartup(bool enabled)
+    {
+        _working.StartWithWindows = enabled;
+        StartupCheck.IsChecked = enabled;
+    }
+
+    private void HotkeyBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (sender is System.Windows.Controls.TextBox box &&
+            GlobalHotkey.TryCapture(key, Keyboard.Modifiers, out string value))
+        {
+            box.Text = value;
+            ErrorText.Text = string.Empty;
+        }
+        e.Handled = true;
+    }
+
+    internal bool TryCaptureNativeHotkey(uint packed)
+    {
+        if (Keyboard.FocusedElement is not System.Windows.Controls.TextBox box ||
+            (box != PanelHotkeyBox && box != FormatHotkeyBox &&
+             box != StyleHotkeyBox && box != CompressHotkeyBox)) return false;
+        if (!GlobalHotkey.TryFormatNative(packed & 0xFFFF, packed >> 16, out string value)) return false;
+        box.Text = value;
+        ErrorText.Text = string.Empty;
+        return true;
     }
 
     private void DisplayMode_Changed(object sender, RoutedEventArgs e)
@@ -111,7 +149,7 @@ public partial class SettingsWindow : Window
         _ready = false;
         _working = new AppSettings();
         DataContext = _working;
-        HotkeyCombo.SelectedItem = _working.Hotkey;
+        SetHotkeyValues();
         SetAppearanceValues();
         SetModeSelection();
         _ready = true;
@@ -122,7 +160,10 @@ public partial class SettingsWindow : Window
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         _working.WeatherLookaheadHours = (int)WeatherHoursSlider.Value;
-        _working.Hotkey = HotkeyCombo.SelectedItem as string ?? GlobalHotkey.Options[0];
+        _working.Hotkey = PanelHotkeyBox.Text;
+        _working.ImageFormatHotkey = FormatHotkeyBox.Text;
+        _working.ImageStyleHotkey = StyleHotkeyBox.Text;
+        _working.ImageCompressHotkey = CompressHotkeyBox.Text;
         string? error = _apply(_working.Clone());
         if (error is null)
         {

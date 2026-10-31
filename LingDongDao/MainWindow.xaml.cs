@@ -40,13 +40,15 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _imageHoverCloseTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private readonly DispatcherTimer _idleHoverTimer = new() { Interval = TimeSpan.FromMilliseconds(45) };
     private readonly Forms.NotifyIcon _trayIcon;
+    private readonly Forms.ToolStripMenuItem _startupMenuItem;
     private bool _isOpen;
     private NoticeKind? _currentKind;
     private SettingsWindow? _settingsWindow;
     private HwndSource? _hotkeySource;
     private IntPtr _hotkeyHandle;
-    private string? _registeredHotkey;
+    private readonly Dictionary<int, string> _registeredHotkeys = new();
     private IslandNotice? _musicNotice;
+    private MusicSnapshot? _musicSnapshot;
     private bool _isPersistentMusicNotice;
     private BitmapSource? _pickerImage;
     private BitmapSource? _imagePreviewSource;
@@ -62,9 +64,6 @@ public partial class MainWindow : Window
     private Point? _cropStart;
     private bool _hoverExpanded;
     private bool _pickerOpen;
-    private bool _convertHotkeyRegistered;
-    private bool _styleHotkeyRegistered;
-    private bool _compressHotkeyRegistered;
     private PickerOperation _pickerOperation;
     private int[] _pickerOptionIndices = [];
     private double _pickerItemWidth;
@@ -117,7 +116,7 @@ public partial class MainWindow : Window
         _weatherMonitor.Notice += ShowNotice;
         _weatherMonitor.Start();
         _musicMonitor = new MusicMonitor(() => _settings);
-        _musicMonitor.Playing += OnMusicPlaying;
+        _musicMonitor.Updated += OnMusicUpdated;
         _musicMonitor.Stopped += OnMusicStopped;
         _musicMonitor.Start();
         _closeTimer.Tick += (_, _) => EndTemporaryNotice();
@@ -135,6 +134,12 @@ public partial class MainWindow : Window
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开控制面板", null, (_, _) => Dispatcher.Invoke(OpenSettings));
+        _startupMenuItem = new Forms.ToolStripMenuItem("开机自动启动")
+        {
+            Checked = _settings.StartWithWindows
+        };
+        _startupMenuItem.Click += (_, _) => Dispatcher.Invoke(ToggleStartupFromTray);
+        menu.Items.Add(_startupMenuItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
         var preview = new Forms.ToolStripMenuItem("预览提示");
         preview.DropDownItems.Add("充电", null, (_, _) => Dispatcher.Invoke(() => ShowCharging(_powerMonitor.Current)));
@@ -172,23 +177,10 @@ public partial class MainWindow : Window
             _hotkeyHandle = new WindowInteropHelper(this).Handle;
             _hotkeySource = HwndSource.FromHwnd(_hotkeyHandle);
             _hotkeySource?.AddHook(HotkeyWndProc);
-            if (!TrySetHotkey(_settings.Hotkey, out _))
+            if (!TrySetHotkeys(_settings, out string? hotkeyError))
             {
                 _trayIcon.BalloonTipTitle = "灵动岛快捷键不可用";
-                _trayIcon.BalloonTipText = "快捷键被占用，请从托盘打开控制面板修改。";
-                _trayIcon.ShowBalloonTip(5000);
-            }
-            var unavailableImageKeys = new List<string>();
-            if (!SetImageHotkey(ConvertHotkeyId, _settings.ImageConversionEnabled,
-                    ref _convertHotkeyRegistered, out _)) unavailableImageKeys.Add("Ctrl+0");
-            if (!SetImageHotkey(StyleHotkeyId, _settings.ImageStyleEnabled,
-                    ref _styleHotkeyRegistered, out _)) unavailableImageKeys.Add("Ctrl+1");
-            if (!SetImageHotkey(CompressHotkeyId, _settings.ImageCompressionEnabled,
-                    ref _compressHotkeyRegistered, out _)) unavailableImageKeys.Add("Ctrl+2");
-            if (unavailableImageKeys.Count > 0)
-            {
-                _trayIcon.BalloonTipTitle = "图片快捷键不可用";
-                _trayIcon.BalloonTipText = $"{string.Join("、", unavailableImageKeys)} 已被占用，请检查控制面板。";
+                _trayIcon.BalloonTipText = hotkeyError ?? "请从托盘打开控制面板修改快捷键。";
                 _trayIcon.ShowBalloonTip(5000);
             }
         };
@@ -213,38 +205,52 @@ public partial class MainWindow : Window
         _settingsWindow.Activate();
     }
 
+    private void ToggleStartupFromTray()
+    {
+        bool enabled = !_settings.StartWithWindows;
+        if (!StartupManager.TrySetEnabled(enabled, out string? error))
+        {
+            _trayIcon.BalloonTipText = error ?? "开机启动设置失败";
+            _trayIcon.ShowBalloonTip(4000);
+            return;
+        }
+        AppSettings candidate = _settings.Clone();
+        candidate.StartWithWindows = enabled;
+        try { SettingsStore.Save(candidate); }
+        catch (Exception exception)
+        {
+            StartupManager.TrySetEnabled(_settings.StartWithWindows, out _);
+            _trayIcon.BalloonTipText = $"保存设置失败：{exception.Message}";
+            _trayIcon.ShowBalloonTip(4000);
+            return;
+        }
+        _settings = candidate;
+        _startupMenuItem.Checked = enabled;
+        _settingsWindow?.SyncStartup(enabled);
+    }
+
     private string? ApplySettings(AppSettings candidate)
     {
         candidate.Normalize();
-        string oldHotkey = _settings.Hotkey;
-        if (!TrySetHotkey(candidate.Hotkey, out string? error)) return error;
+        if (!TrySetHotkeys(candidate, out string? error)) return error;
         bool startupChanged = candidate.StartWithWindows != _settings.StartWithWindows;
         if (startupChanged && !StartupManager.TrySetEnabled(candidate.StartWithWindows, out error))
         {
-            TrySetHotkey(oldHotkey, out _);
-            return error;
-        }
-        bool imageHotkeysChanged = candidate.ImageConversionEnabled != _settings.ImageConversionEnabled ||
-                                   candidate.ImageStyleEnabled != _settings.ImageStyleEnabled ||
-                                   candidate.ImageCompressionEnabled != _settings.ImageCompressionEnabled;
-        if (imageHotkeysChanged && !TrySetImageHotkeys(candidate, out error))
-        {
-            if (startupChanged) StartupManager.TrySetEnabled(_settings.StartWithWindows, out _);
-            TrySetHotkey(oldHotkey, out _);
+            TrySetHotkeys(_settings, out _);
             return error;
         }
         try { SettingsStore.Save(candidate); }
         catch (Exception exception)
         {
-            if (imageHotkeysChanged) TrySetImageHotkeys(_settings, out _);
             if (startupChanged) StartupManager.TrySetEnabled(_settings.StartWithWindows, out _);
-            TrySetHotkey(oldHotkey, out _);
+            TrySetHotkeys(_settings, out _);
             return $"保存设置失败：{exception.Message}";
         }
 
         bool batteryChanged = candidate.BatteryLowEnabled != _settings.BatteryLowEnabled ||
                               candidate.BatteryLowPercent != _settings.BatteryLowPercent;
         _settings = candidate;
+        _startupMenuItem.Checked = candidate.StartWithWindows;
         if (_pickerOpen && !PickerEnabled(_pickerOperation)) ClosePicker();
         _previewSettings = null;
         ApplyVisualSettings();
@@ -252,7 +258,8 @@ public partial class MainWindow : Window
         _statusMonitor.RefreshSettings();
         _weatherMonitor.RefreshSettings();
         _musicMonitor.RefreshSettings();
-        if (candidate.DisplayMode == IslandDisplayMode.Automatic && _musicNotice is not null && !_pickerOpen)
+        if (candidate.DisplayMode == IslandDisplayMode.Automatic && _musicSnapshot?.IsPlaying == true &&
+            _musicNotice is not null && !_pickerOpen)
             ShowNoticeCore(_musicNotice, false);
         return null;
     }
@@ -270,7 +277,8 @@ public partial class MainWindow : Window
     {
         _previewSettings = null;
         ApplyVisualSettings();
-        if (_musicNotice is not null && CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic && !_pickerOpen)
+        if (_musicSnapshot?.IsPlaying == true && _musicNotice is not null &&
+            CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic && !_pickerOpen)
             ShowNoticeCore(_musicNotice, false);
     }
 
@@ -353,6 +361,11 @@ public partial class MainWindow : Window
 
     private IntPtr HotkeyWndProc(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (message == WmHotkey && _settingsWindow?.TryCaptureNativeHotkey(unchecked((uint)lParam.ToInt64())) == true)
+        {
+            handled = true;
+            return IntPtr.Zero;
+        }
         if (message == WmHotkey && wParam.ToInt32() == HotkeyId)
         {
             OpenSettings();
@@ -376,67 +389,60 @@ public partial class MainWindow : Window
         return IntPtr.Zero;
     }
 
-    private bool TrySetHotkey(string hotkey, out string? error)
+    private static (int Id, string Name, string Gesture, bool Enabled)[] HotkeyBindings(AppSettings settings) =>
+    [
+        (HotkeyId, "控制面板", settings.Hotkey, true),
+        (ConvertHotkeyId, "图片格式", settings.ImageFormatHotkey, settings.ImageConversionEnabled),
+        (StyleHotkeyId, "图片风格", settings.ImageStyleHotkey, settings.ImageStyleEnabled),
+        (CompressHotkeyId, "图片压缩", settings.ImageCompressHotkey, settings.ImageCompressionEnabled)
+    ];
+
+    private bool TrySetHotkeys(AppSettings settings, out string? error)
     {
         error = null;
-        if (_registeredHotkey == hotkey) return true;
         if (_hotkeyHandle == IntPtr.Zero)
         {
-            error = "控制面板快捷键尚未初始化。";
+            error = "快捷键尚未初始化。";
             return false;
         }
-
-        string? previous = _registeredHotkey;
-        if (previous is not null) UnregisterHotKey(_hotkeyHandle, HotkeyId);
-        (uint modifiers, uint key) = GlobalHotkey.Parse(hotkey);
-        if (RegisterHotKey(_hotkeyHandle, HotkeyId, modifiers, key))
+        var requested = HotkeyBindings(settings);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var binding in requested)
         {
-            _registeredHotkey = hotkey;
-            return true;
+            if (!GlobalHotkey.TryParse(binding.Gesture, out _, out string canonical))
+            {
+                error = $"{binding.Name}快捷键无效，请按 Ctrl、Alt、Shift 或 Win 加字母、数字、方向键或 F1–F12。";
+                return false;
+            }
+            if (!seen.Add(canonical))
+            {
+                error = $"{canonical} 被多个功能使用，请修改其中一项。";
+                return false;
+            }
         }
-
-        _registeredHotkey = null;
-        if (previous is not null)
+        var previous = _registeredHotkeys.ToArray();
+        foreach (var (id, _) in previous) UnregisterHotKey(_hotkeyHandle, id);
+        _registeredHotkeys.Clear();
+        foreach (var binding in requested.Where(item => item.Enabled))
         {
-            (modifiers, key) = GlobalHotkey.Parse(previous);
-            if (RegisterHotKey(_hotkeyHandle, HotkeyId, modifiers, key)) _registeredHotkey = previous;
+            GlobalHotkey.TryParse(binding.Gesture, out var chord, out string canonical);
+            if (RegisterHotKey(_hotkeyHandle, binding.Id, chord.Modifiers, chord.Key))
+            {
+                _registeredHotkeys[binding.Id] = canonical;
+                continue;
+            }
+            error = $"{canonical} 已被其他程序占用，请换一个快捷键。";
+            foreach (int id in _registeredHotkeys.Keys) UnregisterHotKey(_hotkeyHandle, id);
+            _registeredHotkeys.Clear();
+            foreach (var (id, gesture) in previous)
+            {
+                if (!GlobalHotkey.TryParse(gesture, out var oldChord, out _)) continue;
+                if (RegisterHotKey(_hotkeyHandle, id, oldChord.Modifiers, oldChord.Key))
+                    _registeredHotkeys[id] = gesture;
+            }
+            return false;
         }
-        error = $"{hotkey} 已被其他程序占用，请换一个快捷键。";
-        return false;
-    }
-
-    private bool TrySetImageHotkeys(AppSettings settings, out string? error)
-    {
-        bool oldFormat = _convertHotkeyRegistered, oldStyle = _styleHotkeyRegistered,
-            oldCompress = _compressHotkeyRegistered;
-        if (SetImageHotkey(ConvertHotkeyId, settings.ImageConversionEnabled, ref _convertHotkeyRegistered, out error) &&
-            SetImageHotkey(StyleHotkeyId, settings.ImageStyleEnabled, ref _styleHotkeyRegistered, out error) &&
-            SetImageHotkey(CompressHotkeyId, settings.ImageCompressionEnabled, ref _compressHotkeyRegistered, out error))
-            return true;
-        SetImageHotkey(ConvertHotkeyId, oldFormat, ref _convertHotkeyRegistered, out _);
-        SetImageHotkey(StyleHotkeyId, oldStyle, ref _styleHotkeyRegistered, out _);
-        SetImageHotkey(CompressHotkeyId, oldCompress, ref _compressHotkeyRegistered, out _);
-        return false;
-    }
-
-    private bool SetImageHotkey(int id, bool enabled, ref bool registered, out string? error)
-    {
-        error = null;
-        if (enabled == registered) return true;
-        if (!enabled)
-        {
-            UnregisterHotKey(_hotkeyHandle, id);
-            registered = false;
-            return true;
-        }
-        uint key = (uint)(0x30 + id - ConvertHotkeyId);
-        if (RegisterHotKey(_hotkeyHandle, id, 0x4000 | 0x0002, key))
-        {
-            registered = true;
-            return true;
-        }
-        error = $"Ctrl+{id - ConvertHotkeyId} 已被其他程序占用。";
-        return false;
+        return true;
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -487,6 +493,7 @@ public partial class MainWindow : Window
     private void Island_MouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (_pickerOpen || DateTime.UtcNow < _ignoreIslandClickUntilUtc) return;
+        if (_currentKind == NoticeKind.Music) return;
         ShowCharging(_powerMonitor.Current);
     }
 
@@ -520,7 +527,8 @@ public partial class MainWindow : Window
             CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
 
         PowerSnapshot power = _powerMonitor.Current;
-        IslandNotice notice = power.HasBattery
+        IslandNotice notice = _musicSnapshot is { IsPlaying: false } && _musicNotice is not null
+            ? _musicNotice : power.HasBattery
             ? new IslandNotice(NoticeKind.Charging,
                 power.IsPluggedIn ? "正在充电" : "电池状态",
                 power.Percent is int percent ? $"当前电量 {percent}%" : "电量暂不可用",
@@ -957,17 +965,26 @@ public partial class MainWindow : Window
             BatteryPercent: power.Percent));
     }
 
-    private void OnMusicPlaying(MusicSnapshot snapshot)
+    private void OnMusicUpdated(MusicSnapshot snapshot)
     {
+        MusicSnapshot? previous = _musicSnapshot;
+        bool changed = previous is null || previous.Source != snapshot.Source ||
+                       previous.Title != snapshot.Title || previous.Artist != snapshot.Artist ||
+                       previous.IsPlaying != snapshot.IsPlaying;
+        _musicSnapshot = snapshot;
+        UpdateMusicProgress();
+        if (!changed) return;
         string detail = string.IsNullOrEmpty(snapshot.Artist)
             ? snapshot.PlayerName : $"{snapshot.PlayerName} · {snapshot.Artist}";
         _musicNotice = new IslandNotice(NoticeKind.Music, snapshot.Title, detail);
-        if (!_pickerOpen && (!_isOpen || _currentKind == NoticeKind.Music))
+        if (!_pickerOpen && !_imageEditing && (snapshot.IsPlaying || previous?.IsPlaying == true) &&
+            (!_isOpen || _currentKind == NoticeKind.Music))
             ShowNoticeCore(_musicNotice, false);
     }
 
     private void OnMusicStopped()
     {
+        _musicSnapshot = null;
         _musicNotice = null;
         if (_currentKind == NoticeKind.Music && !_pickerOpen) Collapse();
     }
@@ -975,9 +992,68 @@ public partial class MainWindow : Window
     private void EndTemporaryNotice()
     {
         if (_pickerOpen || _imageEditing) return;
-        if (_musicNotice is not null && CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
+        if (_musicSnapshot?.IsPlaying == true && _musicNotice is not null &&
+            CurrentVisualSettings.DisplayMode == IslandDisplayMode.Automatic)
             ShowNoticeCore(_musicNotice, false);
         else Collapse();
+    }
+
+    private void UpdateMusicProgress()
+    {
+        if (_musicSnapshot is not { } snapshot) return;
+        MusicToggleButton.Content = snapshot.IsPlaying ? "Ⅱ" : "▶";
+        System.Windows.Automation.AutomationProperties.SetName(MusicToggleButton,
+            snapshot.IsPlaying ? "暂停" : "播放");
+        MusicTimeText.Text = snapshot.Duration > TimeSpan.Zero
+            ? $"{FormatMusicTime(snapshot.Position)} / {FormatMusicTime(snapshot.Duration)}" : "— / —";
+        double fraction = snapshot.Duration > TimeSpan.Zero
+            ? Math.Clamp(snapshot.Position.TotalSeconds / snapshot.Duration.TotalSeconds, 0, 1) : 0;
+        MusicProgressFill.Width = MusicProgressTrack.ActualWidth * fraction;
+        MusicProgressTrack.Cursor = _musicMonitor.CanSeek ? System.Windows.Input.Cursors.Hand :
+            System.Windows.Input.Cursors.Arrow;
+        MusicProgressTrack.ToolTip = _musicMonitor.CanSeek ? "点击跳转播放位置" : "当前播放器仅提供进度显示";
+    }
+
+    private static string FormatMusicTime(TimeSpan time) => time.TotalHours >= 1
+        ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}"
+        : $"{(int)time.TotalMinutes}:{time.Seconds:00}";
+
+    private void MusicProgressTrack_SizeChanged(object sender, SizeChangedEventArgs e)
+        => UpdateMusicProgress();
+
+    private async void MusicProgressTrack_MouseLeftButtonDown(object sender,
+        System.Windows.Input.MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        if (!_musicMonitor.CanSeek || _musicSnapshot is not { Duration: var duration } ||
+            duration <= TimeSpan.Zero || MusicProgressTrack.ActualWidth <= 0) return;
+        double fraction = Math.Clamp(e.GetPosition(MusicProgressTrack).X /
+            MusicProgressTrack.ActualWidth, 0, 1);
+        await _musicMonitor.SeekAsync(TimeSpan.FromTicks((long)(duration.Ticks * fraction)));
+    }
+
+    private async void MusicPrevious_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        await RunMusicControl(MusicControl.Previous);
+    }
+
+    private async void MusicToggle_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        await RunMusicControl(MusicControl.Toggle);
+    }
+
+    private async void MusicNext_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        await RunMusicControl(MusicControl.Next);
+    }
+
+    private async Task RunMusicControl(MusicControl command)
+    {
+        if (!await _musicMonitor.ControlAsync(command) && _currentKind == NoticeKind.Music)
+            DetailText.Text = "播放器未响应，请检查播放器快捷键";
     }
 
     private enum PickerOperation { Format, Style, Compress }
@@ -1311,7 +1387,7 @@ public partial class MainWindow : Window
         HideImagePreview();
         _closeTimer.Stop();
         _hoverExpanded = false;
-        _isPersistentMusicNotice = ReferenceEquals(notice, _musicNotice);
+        _isPersistentMusicNotice = ReferenceEquals(notice, _musicNotice) && _musicSnapshot?.IsPlaying == true;
         ContentText.Visibility = Visibility.Visible;
         FormatPicker.Visibility = Visibility.Collapsed;
         _currentKind = notice.Kind;
@@ -1320,6 +1396,10 @@ public partial class MainWindow : Window
         bool isImage = notice.Image is not null;
         IconBadge.Visibility = isImage ? Visibility.Collapsed : Visibility.Visible;
         PreviewImageFrame.Visibility = isImage ? Visibility.Visible : Visibility.Collapsed;
+        bool music = notice.Kind == NoticeKind.Music && _musicSnapshot is not null;
+        MusicControls.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
+        MusicProgressTrack.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
+        if (music) UpdateMusicProgress();
         PreviewImageBrush.ImageSource = notice.Image;
         _imagePreviewSource = notice.FullImage ?? (notice.ImagePath is null ? notice.Image : null);
         _imagePreviewPath = notice.ImagePath;
@@ -1437,10 +1517,7 @@ public partial class MainWindow : Window
     {
         _closeTimer.Stop();
         _idleHoverTimer.Stop();
-        if (_registeredHotkey is not null) UnregisterHotKey(_hotkeyHandle, HotkeyId);
-        if (_convertHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, ConvertHotkeyId);
-        if (_styleHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, StyleHotkeyId);
-        if (_compressHotkeyRegistered) UnregisterHotKey(_hotkeyHandle, CompressHotkeyId);
+        foreach (int id in _registeredHotkeys.Keys) UnregisterHotKey(_hotkeyHandle, id);
         _hotkeySource?.RemoveHook(HotkeyWndProc);
         _settingsWindow?.Close();
         _clipboardMonitor.Dispose();

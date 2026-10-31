@@ -213,8 +213,31 @@ internal static class Program
             Console.WriteLine($"正在发声的进程数：{audible.Count}");
             return;
         }
+        if (args.Contains("--music-control-live"))
+        {
+            int index = Array.IndexOf(args, "--music-control-live");
+            MusicControl command = index + 1 < args.Length ? args[index + 1].ToLowerInvariant() switch
+            {
+                "previous" => MusicControl.Previous,
+                "toggle" => MusicControl.Toggle,
+                "next" => MusicControl.Next,
+                _ => throw new ArgumentException("Use previous, toggle, or next.")
+            } : throw new ArgumentException("Missing music command.");
+            var reader = new NetEasePlaybackReader();
+            MusicSnapshot? snapshot = Task.Run(reader.Read).GetAwaiter().GetResult();
+            if (snapshot is null) throw new Exception("没有可控制的网易云歌曲。");
+            bool sent = PlayerTransport.TrySend(snapshot.Source, command);
+            Console.WriteLine($"控制发送：{sent} · {command}");
+            return;
+        }
         if (args.Contains("--music-self-test"))
         {
+            byte[] timeline = System.Text.Encoding.Unicode.GetBytes("1:23/4:56\0");
+            if (!KugouProgressReader.TryParsePair(timeline, out int position, out int duration) ||
+                position != 83 || duration != 296 ||
+                KugouProgressReader.TryParsePair(System.Text.Encoding.Unicode.GetBytes("5:00/4:56\0"),
+                    out _, out _))
+                throw new Exception("酷狗进度文本解析错误");
             var track = MusicFallbackReader.ParseKugouTitle("歌手 - 歌名 - 酷狗音乐");
             if (track != ("歌手", "歌名") ||
                 MusicFallbackReader.ParseKugouTitle("酷狗音乐") is not null ||
@@ -226,6 +249,25 @@ internal static class Program
                 NetEasePlaybackReader.FindPattern(bytes, 0, 5, signature) != -1)
                 throw new Exception("网易云播放状态特征扫描错误");
             Console.WriteLine("音乐标题与特征扫描检查通过。");
+            return;
+        }
+        if (args.Contains("--hotkey-self-test"))
+        {
+            if (!GlobalHotkey.TryCapture(System.Windows.Input.Key.D5,
+                    System.Windows.Input.ModifierKeys.Control, out string value) || value != "Ctrl+5" ||
+                !GlobalHotkey.TryParse("shift+ctrl+F12", out var chord, out string normalized) ||
+                normalized != "Ctrl+Shift+F12" || chord.Key != 0x7B ||
+                !GlobalHotkey.TryFormatNative(0x4002, 0x31, out string native) || native != "Ctrl+1" ||
+                GlobalHotkey.TryParse("Ctrl+BadKey", out _, out _) ||
+                GlobalHotkey.TryParse("Ctrl+Ctrl+1", out _, out _))
+                throw new Exception("快捷键解析或录入错误");
+            var oldSettings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>("{\"Hotkey\":\"Ctrl+Alt+D\"}")!;
+            oldSettings.Normalize();
+            if (oldSettings.ImageFormatHotkey != "Ctrl+0" ||
+                oldSettings.ImageStyleHotkey != "Ctrl+1" ||
+                oldSettings.ImageCompressHotkey != "Ctrl+2")
+                throw new Exception("旧设置迁移快捷键失败");
+            Console.WriteLine("快捷键录入与旧设置兼容检查通过。");
             return;
         }
         if (args.Contains("--weather-live"))

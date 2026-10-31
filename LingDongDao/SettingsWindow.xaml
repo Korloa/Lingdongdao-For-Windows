@@ -19,6 +19,16 @@
             <Setter Property="Margin" Value="0,8,0,15"/>
             <Setter Property="IsSnapToTickEnabled" Value="True"/>
         </Style>
+        <Style x:Key="HotkeyBoxStyle" TargetType="TextBox">
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="Background" Value="#1B2A2C"/>
+            <Setter Property="Foreground" Value="#F3F0E9"/>
+            <Setter Property="BorderBrush" Value="#526461"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="Cursor" Value="Hand"/>
+        </Style>
         <Style x:Key="Panel" TargetType="Border">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="#344547"/>
@@ -298,10 +308,24 @@
                 <Border x:Name="StartupPanel" Style="{StaticResource Panel}">
                     <StackPanel>
                         <TextBlock Text="启动与快捷键" Style="{StaticResource PanelTitle}"/>
-                        <CheckBox Content="开机自动启动灵动岛" IsChecked="{Binding StartWithWindows}"/>
-                        <TextBlock Text="控制面板快捷键" Foreground="#D9E5E1" Margin="0,8,0,0"/>
-                        <ComboBox x:Name="HotkeyCombo" Height="34" Margin="0,12,0,0"
-                                   Background="#293D3B" Foreground="#172021"/>
+                        <CheckBox x:Name="StartupCheck" Content="开机自动启动灵动岛" IsChecked="{Binding StartWithWindows}"/>
+                        <TextBlock Text="点击右侧按键框，然后按下新的组合键" Foreground="#9CACAA" FontSize="11" Margin="0,8,0,9"/>
+                        <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="控制面板" VerticalAlignment="Center" Foreground="#D9E5E1"/>
+                            <TextBox x:Name="PanelHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="图片格式" VerticalAlignment="Center" Foreground="#D9E5E1"/>
+                            <TextBox x:Name="FormatHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="图片风格" VerticalAlignment="Center" Foreground="#D9E5E1"/>
+                            <TextBox x:Name="StyleHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                        </Grid>
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="图片压缩" VerticalAlignment="Center" Foreground="#D9E5E1"/>
+                            <TextBox x:Name="CompressHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                        </Grid>
                     </StackPanel>
                 </Border>
             </StackPanel>

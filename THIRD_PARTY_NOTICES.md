@@ -1,7 +1,8 @@
 # Third-party notices
 
 The NetEase Cloud Music process signature and playback structure offsets used by
-`NetEasePlaybackReader.cs` were adapted from MuSync:
+`NetEasePlaybackReader.cs`, and the KuGou timeline scanning approach used by
+`KugouProgressReader.cs`, were adapted from MuSync:
 https://github.com/ZhaoBuyan/MuSync
 
 MIT License

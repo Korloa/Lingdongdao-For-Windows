@@ -21,6 +21,8 @@
     <Compile Include="..\LingDongDao\MusicMonitor.cs" Link="MusicMonitor.cs" />
     <Compile Include="..\LingDongDao\MusicFallbackReader.cs" Link="MusicFallbackReader.cs" />
     <Compile Include="..\LingDongDao\NetEasePlaybackReader.cs" Link="NetEasePlaybackReader.cs" />
+    <Compile Include="..\LingDongDao\KugouProgressReader.cs" Link="KugouProgressReader.cs" />
+    <Compile Include="..\LingDongDao\PlayerTransport.cs" Link="PlayerTransport.cs" />
     <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
   </ItemGroup>
 </Project>

@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>LingDongDao</AssemblyName>
     <RootNamespace>LingDongDao</RootNamespace>
-    <Version>0.5.3</Version>
+    <Version>0.5.4</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>..\assets\LingDongDao.ico</ApplicationIcon>
   </PropertyGroup>

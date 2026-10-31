@@ -5,6 +5,33 @@
         WindowStyle="None" AllowsTransparency="True" Background="{x:Null}"
         ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
         ShowActivated="False" Focusable="True" PreviewKeyDown="Window_PreviewKeyDown">
+    <Window.Resources>
+        <Style x:Key="MusicControlButton" TargetType="Button">
+            <Setter Property="Width" Value="25"/>
+            <Setter Property="Height" Value="27"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#F7F8FA"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontFamily" Value="Segoe UI Symbol"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="#FF91A7"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Border x:Name="Island"
                 Width="58" Height="4"
@@ -58,6 +85,13 @@
                         <TextBlock x:Name="DetailText" Text="已连接电源" FontFamily="Microsoft YaHei UI"
                                    FontSize="11" Foreground="#A8AFBB" Margin="0,3,0,0"
                                    TextTrimming="CharacterEllipsis"/>
+                        <Border x:Name="MusicProgressTrack" Height="4" Margin="0,6,0,0"
+                                Background="#39434B" ClipToBounds="True" Visibility="Collapsed"
+                                SizeChanged="MusicProgressTrack_SizeChanged"
+                                PreviewMouseLeftButtonDown="MusicProgressTrack_MouseLeftButtonDown">
+                            <Border x:Name="MusicProgressFill" HorizontalAlignment="Left" Width="0"
+                                    Background="#FF7794"/>
+                        </Border>
                     </StackPanel>
                     <Grid x:Name="FormatPicker" Grid.Column="1" Margin="8,0,0,0"
                           VerticalAlignment="Center" Visibility="Collapsed" Focusable="True"
@@ -104,6 +138,19 @@
                         <Border x:Name="BatteryFill" Width="12" Height="9" HorizontalAlignment="Left"
                                 Margin="3,0,0,0" CornerRadius="1.5" Background="#54F4B0"/>
                     </Grid>
+                    <StackPanel x:Name="MusicControls" Grid.Column="2" Orientation="Vertical"
+                                VerticalAlignment="Center" Margin="5,0,0,0" Visibility="Collapsed">
+                        <TextBlock x:Name="MusicTimeText" Text="0:00 / 0:00" FontFamily="Microsoft YaHei UI"
+                                   FontSize="9" Foreground="#A8AFBB" HorizontalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="⏮" Style="{StaticResource MusicControlButton}"
+                                    AutomationProperties.Name="上一首" Click="MusicPrevious_Click"/>
+                            <Button x:Name="MusicToggleButton" Content="Ⅱ" Style="{StaticResource MusicControlButton}"
+                                    AutomationProperties.Name="暂停" Click="MusicToggle_Click"/>
+                            <Button Content="⏭" Style="{StaticResource MusicControlButton}"
+                                    AutomationProperties.Name="下一首" Click="MusicNext_Click"/>
+                        </StackPanel>
+                    </StackPanel>
                 </Grid>
             </Grid>
         </Border>
