@@ -8,11 +8,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>LingDongDao</AssemblyName>
     <RootNamespace>LingDongDao</RootNamespace>
-    <Version>0.5.7</Version>
+    <Version>0.6.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>..\assets\LingDongDao.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Perception\Perception.csproj" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
   </ItemGroup>

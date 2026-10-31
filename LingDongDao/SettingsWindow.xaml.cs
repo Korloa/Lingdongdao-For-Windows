@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
+using LingDongDao.Perception;
 
 namespace LingDongDao;
 
@@ -9,24 +11,72 @@ public partial class SettingsWindow : Window
     private readonly Func<AppSettings, string?> _apply;
     private readonly Action<AppSettings> _preview;
     private readonly Action _cancelPreview;
+    private readonly PerceptionService _perception;
+    private readonly DispatcherTimer _perceptionTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private AppSettings _working;
     private bool _ready;
     private bool _saved;
 
     internal SettingsWindow(AppSettings current, Func<AppSettings, string?> apply,
-        Action<AppSettings> preview, Action cancelPreview)
+        Action<AppSettings> preview, Action cancelPreview, PerceptionService perception)
     {
         InitializeComponent();
         _apply = apply;
         _preview = preview;
         _cancelPreview = cancelPreview;
+        _perception = perception;
         _working = current.Clone();
         DataContext = _working;
         SetHotkeyValues();
         SetAppearanceValues();
         SetModeSelection();
-        Loaded += (_, _) => _ready = true;
+        SetPerceptionValues();
+        _perceptionTimer.Tick += (_, _) => RefreshPerceptionStatus();
+        Loaded += (_, _) => { _ready = true; _perceptionTimer.Start(); RefreshPerceptionStatus(); };
     }
+
+    private void SetPerceptionValues()
+    {
+        PerceptionOptions options = _working.Perception;
+        PerceptionEnabledCheck.IsChecked = options.Enabled;
+        PerceptionPausedCheck.IsChecked = options.Paused;
+        CloudUploadCheck.IsChecked = options.CloudEnabled && options.UploadConsent;
+        GuiDetectorCheck.IsChecked = options.GuiDetectorEnabled;
+        ResourceModeChoice.SelectedIndex = (int)options.Mode;
+        PerceptionSampleSlider.SetCurrentValue(SettingSlider.ValueProperty, options.SampleSeconds);
+        PerceptionThresholdSlider.SetCurrentValue(SettingSlider.ValueProperty, options.EscalationThreshold);
+    }
+
+    private void RefreshPerceptionStatus()
+    {
+        var score = _perception.LastAssessment;
+        PerceptionStatusText.Text = $"状态：{(_perception.IsRunning ? "运行中" : "已停止")}  ·  当前软件：{_perception.CurrentProcess}" +
+            $"\n最近事件：{score?.EventType ?? "—"}  ·  本地介入分：{score?.InterventionScore.ToString("0.00") ?? "—"}";
+        var (mb, cpu) = _perception.ResourceUsage();
+        PerceptionResourceText.Text = $"进程合计 {mb + _perception.WorkerMb:0} MB（主进程 {mb:0} MB）· CPU {cpu:0.0}% · 截图缓存 {_perception.FrameCount} 张 / {_perception.FrameBytes / 1048576.0:0.0} MB" +
+            $"\n云端调用 {_perception.CloudCallsToday} 次 · OCR: {_perception.OcrStatus} · GUI: {_perception.GuiStatus}";
+        PerceptionLogBox.Text = string.Join(Environment.NewLine, _perception.RecentLogs()
+            .TakeLast(35).Select(item => $"{item.Time:HH:mm:ss} [{item.Module}/{item.Level}] {item.Event} {item.Summary}"));
+    }
+
+    private void CloudUpload_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!_ready || _working.Perception.UploadConsent) return;
+        MessageBoxResult answer = System.Windows.MessageBox.Show(this,
+            "启用后，只有本地评分通过门控时，当前窗口截图、OCR 文字和操作摘要才会发往你配置的云端接口，可能产生 API 费用。是否明确授权截图上传？",
+            "授权云端截图上传", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer == MessageBoxResult.Yes) _working.Perception.UploadConsent = true;
+        else CloudUploadCheck.IsChecked = false;
+    }
+
+    private void ClearFrames_Click(object sender, RoutedEventArgs e)
+    {
+        _perception.ClearFrames();
+        RefreshPerceptionStatus();
+    }
+
+    internal void NavigateToPerception() => Dispatcher.BeginInvoke(
+        new Action(() => PerceptionPanel.BringIntoView()));
 
     private void SetAppearanceValues()
     {
@@ -152,6 +202,7 @@ public partial class SettingsWindow : Window
         SetHotkeyValues();
         SetAppearanceValues();
         SetModeSelection();
+        SetPerceptionValues();
         _ready = true;
         _preview(_working.Clone());
         ErrorText.Text = "已预览默认值，保存后生效。";
@@ -159,6 +210,16 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        _working.Perception.Enabled = PerceptionEnabledCheck.IsChecked == true;
+        _working.Perception.Paused = PerceptionPausedCheck.IsChecked == true;
+        _working.Perception.CloudEnabled = CloudUploadCheck.IsChecked == true;
+        _working.Perception.UploadConsent = _working.Perception.CloudEnabled && _working.Perception.UploadConsent;
+        _working.Perception.GuiDetectorEnabled = GuiDetectorCheck.IsChecked == true;
+        _working.Perception.Mode = (ResourceMode)Math.Max(0, ResourceModeChoice.SelectedIndex);
+        _working.Perception.SampleSeconds = PerceptionSampleSlider.Value;
+        _working.Perception.EscalationThreshold = PerceptionThresholdSlider.Value;
+        if (_working.Perception.CloudEnabled && !_working.Perception.UploadConsent)
+        { ErrorText.Text = "请先明确授权云端截图上传。"; return; }
         _working.WeatherLookaheadHours = (int)WeatherHoursSlider.Value;
         _working.Hotkey = PanelHotkeyBox.Text;
         _working.ImageFormatHotkey = FormatHotkeyBox.Text;
@@ -183,6 +244,7 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _perceptionTimer.Stop();
         if (!_saved) _cancelPreview();
         base.OnClosed(e);
     }

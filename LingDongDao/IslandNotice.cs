@@ -16,6 +16,7 @@ internal enum NoticeKind
     BatteryLow,
     Thunderstorm,
     Music,
+    AgentSuggestion,
     ImageConverted
 }
 

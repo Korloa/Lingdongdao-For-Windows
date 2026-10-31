@@ -108,6 +108,7 @@
                 <Button Content="外观与位置" Tag="ShapePanel" Click="Navigate_Click" Style="{StaticResource NavButton}"/>
                 <Button Content="图片工具" Tag="ImagePanel" Click="Navigate_Click" Style="{StaticResource NavButton}"/>
                 <Button Content="提醒与阈值" Tag="AlertsPanel" Click="Navigate_Click" Style="{StaticResource NavButton}"/>
+                <Button Content="桌面感知" Tag="PerceptionPanel" Click="Navigate_Click" Style="{StaticResource NavButton}"/>
                 <Button Content="启动与快捷键" Tag="StartupPanel" Click="Navigate_Click" Style="{StaticResource NavButton}"/>
             </StackPanel>
         </Border>
@@ -302,6 +303,44 @@
                         </Grid>
                         <Slider x:Name="BatterySlider" Minimum="5" Maximum="40" TickFrequency="1"
                                 Value="{Binding BatteryLowPercent, Mode=TwoWay}" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="PerceptionPanel" Style="{StaticResource Panel}">
+                    <StackPanel>
+                        <TextBlock Text="桌面感知" Style="{StaticResource PanelTitle}"/>
+                        <TextBlock Text="默认关闭。开启后截图仅缓存在内存，本地先判断是否需要分析；云端上传需单独授权。"
+                                   Foreground="#9CACAA" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <CheckBox x:Name="PerceptionEnabledCheck" Content="开启本地感知"/>
+                        <CheckBox x:Name="PerceptionPausedCheck" Content="暂停监控"/>
+                        <CheckBox x:Name="CloudUploadCheck" Content="允许云端分析与截图上传"
+                                  Checked="CloudUpload_Checked"/>
+                        <CheckBox x:Name="GuiDetectorCheck" Content="增强模式使用 GUI 视觉检测器"/>
+                        <Grid Margin="0,8,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="135"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="资源模式" VerticalAlignment="Center" Foreground="#D9E5E1"/>
+                            <ComboBox x:Name="ResourceModeChoice" Grid.Column="1" Height="30"
+                                      Background="#1B2A2C" Foreground="#172021">
+                                <ComboBoxItem Content="低负载：窗口 API + 变化时 OCR" Tag="Low"/>
+                                <ComboBoxItem Content="标准：窗口 API + OCR + 规则" Tag="Standard"/>
+                                <ComboBoxItem Content="增强：额外启用 GUI 检测" Tag="Enhanced"/>
+                            </ComboBox>
+                        </Grid>
+                        <local:SettingSlider x:Name="PerceptionSampleSlider" Label="截图间隔" Unit="秒"
+                                             Minimum="0.5" Maximum="10" Step="0.5" Decimals="1"/>
+                        <local:SettingSlider x:Name="PerceptionThresholdSlider" Label="云端触发阈值" Unit=""
+                                             Minimum="0.5" Maximum="1" Step="0.05" Decimals="2"/>
+                        <TextBlock x:Name="PerceptionStatusText" Foreground="#D9E5E1"
+                                   TextWrapping="Wrap" Margin="0,8,0,5"/>
+                        <TextBlock x:Name="PerceptionResourceText" Foreground="#9CACAA"
+                                   TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <Button Content="清空内存截图" Width="125" HorizontalAlignment="Left"
+                                Style="{StaticResource SecondaryButton}" Click="ClearFrames_Click"/>
+                        <TextBlock Text="感知日志" Foreground="#F4C58A" FontSize="12" Margin="0,14,0,7"/>
+                        <TextBox x:Name="PerceptionLogBox" Height="180" IsReadOnly="True"
+                                 Background="#070D0F" Foreground="#A5D1C6" BorderBrush="#344547"
+                                 FontFamily="Consolas" FontSize="11" TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
                     </StackPanel>
                 </Border>
 

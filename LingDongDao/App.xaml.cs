@@ -9,6 +9,8 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        System.Windows.Forms.Application.SetHighDpiMode(
+            System.Windows.Forms.HighDpiMode.PerMonitorV2);
         _singleInstance = new Mutex(true, "Local\\LingDongDao.App", out bool isFirstInstance);
         if (!isFirstInstance)
         {

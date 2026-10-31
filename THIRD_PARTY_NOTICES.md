@@ -1,5 +1,11 @@
 # Third-party notices
 
+Optional desktop perception uses RapidOCR (Apache-2.0 model derivatives and
+project license; see https://rapidai.github.io/RapidOCRDocs/main/en/model_licenses/),
+ONNX Runtime (MIT; https://github.com/microsoft/onnxruntime), and an optional
+Salesforce GPA-GUI-Detector model (MIT; https://huggingface.co/Salesforce/GPA-GUI-Detector).
+Model weights are downloaded separately and are not committed to this source tree.
+
 The NetEase Cloud Music process signature and playback structure offsets used by
 `NetEasePlaybackReader.cs`, and the KuGou timeline scanning approach used by
 `KugouProgressReader.cs`, were adapted from MuSync:

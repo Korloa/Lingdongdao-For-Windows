@@ -16,6 +16,7 @@ using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using Forms = System.Windows.Forms;
 using DrawingColor = System.Drawing.Color;
 using MediaColor = System.Windows.Media.Color;
+using LingDongDao.Perception;
 using Point = System.Windows.Point;
 
 namespace LingDongDao;
@@ -36,6 +37,7 @@ public partial class MainWindow : Window
     private readonly StatusMonitor _statusMonitor;
     private readonly WeatherMonitor _weatherMonitor;
     private readonly MusicMonitor _musicMonitor;
+    private readonly PerceptionService _perception;
     private readonly DispatcherTimer _closeTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
     private readonly DispatcherTimer _imageHoverCloseTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private readonly DispatcherTimer _idleHoverTimer = new() { Interval = TimeSpan.FromMilliseconds(45) };
@@ -85,7 +87,12 @@ public partial class MainWindow : Window
     {
         _settings = SettingsStore.Load();
         _settings.StartWithWindows = StartupManager.IsEnabledForCurrentExecutable();
+        _perception = new PerceptionService(() => _settings.Perception);
+        _perception.Suggested += decision => Dispatcher.BeginInvoke(new Action(() =>
+            ShowNotice(new IslandNotice(NoticeKind.AgentSuggestion,
+                "发现可能需要帮助的地方", decision.Suggestion))));
         InitializeComponent();
+        Loaded += (_, _) => _perception.Refresh();
         ImageHoverPopup.PlacementTarget = Island;
         ImageStyleChoice.ItemsSource = ClipboardImageEffects.Styles;
         ImageStyleChoice.SelectedIndex = 0;
@@ -133,6 +140,7 @@ public partial class MainWindow : Window
 
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开控制面板", null, (_, _) => Dispatcher.Invoke(OpenSettings));
+        menu.Items.Add("桌面感知状态", null, (_, _) => Dispatcher.Invoke(OpenPerceptionSettings));
         _startupMenuItem = new Forms.ToolStripMenuItem("开机自动启动")
         {
             Checked = _settings.StartWithWindows
@@ -198,10 +206,17 @@ public partial class MainWindow : Window
             _settingsWindow.Activate();
             return;
         }
-        _settingsWindow = new SettingsWindow(_settings, ApplySettings, PreviewSettings, CancelSettingsPreview);
+        _settingsWindow = new SettingsWindow(_settings, ApplySettings, PreviewSettings,
+            CancelSettingsPreview, _perception);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
+    }
+
+    private void OpenPerceptionSettings()
+    {
+        OpenSettings();
+        _settingsWindow?.NavigateToPerception();
     }
 
     private void ToggleStartupFromTray()
@@ -224,6 +239,7 @@ public partial class MainWindow : Window
             return;
         }
         _settings = candidate;
+        _perception.Refresh();
         _startupMenuItem.Checked = enabled;
         _settingsWindow?.SyncStartup(enabled);
     }
@@ -257,6 +273,7 @@ public partial class MainWindow : Window
         _statusMonitor.RefreshSettings();
         _weatherMonitor.RefreshSettings();
         _musicMonitor.RefreshSettings();
+        _perception.Refresh();
         return null;
     }
 
@@ -1454,6 +1471,7 @@ public partial class MainWindow : Window
             NoticeKind.WifiConnected => MediaColor.FromRgb(103, 219, 244),
             NoticeKind.Thunderstorm => MediaColor.FromRgb(165, 160, 255),
             NoticeKind.Music => MediaColor.FromRgb(255, 119, 148),
+            NoticeKind.AgentSuggestion => MediaColor.FromRgb(154, 202, 255),
             NoticeKind.ImageConverted => MediaColor.FromRgb(84, 244, 176),
             _ => MediaColor.FromRgb(255, 187, 88)
         };
@@ -1471,6 +1489,7 @@ public partial class MainWindow : Window
             NoticeKind.Thunderstorm =>
                 "M 6,15 C 3,15 2,13 2,11 C 2,8 4,6 7,6 C 8,3 11,2 14,3 C 17,3 19,5 19,8 C 22,8 23,10 23,12 C 23,14 21,15 19,15 H 14 L 10,21 L 11,16 H 8 L 7,20 L 6,15 Z",
             NoticeKind.Music => "M 10,3 V 16 C 8,15 5,16 5,19 C 5,21 7,22 9,21 C 11,20 12,18 12,16 V 7 L 20,5 V 13 C 18,12 15,13 15,16 C 15,18 17,19 19,18 C 21,17 22,15 22,13 V 2 Z",
+            NoticeKind.AgentSuggestion => "M 3,4 H 21 V 17 H 10 L 5,21 V 17 H 3 Z M 7,8 H 17 V 10 H 7 Z M 7,12 H 15 V 14 H 7 Z",
             NoticeKind.ImageConverted => "M 4,4 H 20 V 20 H 4 Z M 7,16 L 11,12 L 14,15 L 17,10 L 20,15 V 20 H 4 Z",
             _ => "M 10,2 H 14 L 13,15 H 11 Z M 10,18 H 14 V 22 H 10 Z"
         });
@@ -1517,6 +1536,7 @@ public partial class MainWindow : Window
         _statusMonitor.Dispose();
         _weatherMonitor.Dispose();
         _musicMonitor.Dispose();
+        _perception.Dispose();
         _powerMonitor.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Icon?.Dispose();

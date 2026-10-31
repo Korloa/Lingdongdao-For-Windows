@@ -1,4 +1,4 @@
-#define AppVersion "0.5.7"
+#define AppVersion "0.6.0"
 #define AppName "灵动岛"
 
 [Setup]
@@ -33,6 +33,11 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: unchecked
 Source: "..\dist\LingDongDao.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: isreadme
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"
+Source: "..\docs\PERCEPTION.md"; DestDir: "{app}\docs"
+Source: "..\perception_py\ocr_worker.py"; DestDir: "{app}\perception_py"
+Source: "..\perception_py\gui_worker.py"; DestDir: "{app}\perception_py"
+Source: "..\perception_py\requirements.txt"; DestDir: "{app}\perception_py"
+Source: "..\scripts\setup-perception.ps1"; DestDir: "{app}\scripts"
 
 [Icons]
 Name: "{group}\灵动岛"; Filename: "{app}\LingDongDao.exe"

@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows.Input;
+using LingDongDao.Perception;
 
 namespace LingDongDao;
 
@@ -38,6 +39,7 @@ internal sealed class AppSettings
     public bool ChargingEnabled { get; set; } = true;
     public bool ClipboardEnabled { get; set; } = true;
     public bool MusicEnabled { get; set; } = true;
+    public PerceptionOptions Perception { get; set; } = new();
     public bool ImageConversionEnabled { get; set; } = true;
     public bool ImageStyleEnabled { get; set; } = true;
     public bool ImageCompressionEnabled { get; set; } = true;
@@ -67,10 +69,17 @@ internal sealed class AppSettings
     public int GpuTemperatureC { get; set; } = 88;
     public int BatteryLowPercent { get; set; } = 20;
 
-    public AppSettings Clone() => (AppSettings)MemberwiseClone();
+    public AppSettings Clone()
+    {
+        var copy = (AppSettings)MemberwiseClone();
+        copy.Perception = Perception.Clone();
+        return copy;
+    }
 
     public void Normalize()
     {
+        Perception ??= new PerceptionOptions();
+        Perception.Normalize();
         if (!Enum.IsDefined(DisplayMode)) DisplayMode = IslandDisplayMode.Automatic;
         LineWidth = Math.Clamp(LineWidth, 20, 140);
         LineThickness = Math.Clamp(LineThickness, 1, 10);

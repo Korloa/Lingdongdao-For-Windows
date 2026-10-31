@@ -3,6 +3,13 @@ LingDongDao/obj/
 Diagnostics/bin/
 Diagnostics/obj/
 dist/
+.venv/
+models/
+Perception/bin/
+Perception/obj/
+PerceptionTests/bin/
+PerceptionTests/obj/
+reports/
 .vs/
 *.user
 *.suo
