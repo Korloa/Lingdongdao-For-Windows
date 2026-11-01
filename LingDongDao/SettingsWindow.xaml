@@ -315,6 +315,23 @@
                         <CheckBox x:Name="PerceptionPausedCheck" Content="暂停监控"/>
                         <CheckBox x:Name="CloudUploadCheck" Content="允许云端分析与截图上传"
                                   Checked="CloudUpload_Checked"/>
+                        <TextBlock Text="DeepSeek V4.1 Flash · 密钥仅加密保存在当前 Windows 用户下"
+                                   Foreground="#9CACAA" FontSize="11" Margin="0,2,0,6"/>
+                        <Grid Margin="0,0,0,5">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="82"/>
+                                <ColumnDefinition Width="65"/>
+                            </Grid.ColumnDefinitions>
+                            <PasswordBox x:Name="DeepSeekKeyBox" Grid.Column="0" Height="29"
+                                         Background="#0B1517" Foreground="#E8F1ED" BorderBrush="#405558"/>
+                            <Button Grid.Column="1" Content="保存密钥" Margin="7,0,0,0"
+                                    Style="{StaticResource SecondaryButton}" Click="SaveDeepSeekKey_Click"/>
+                            <Button Grid.Column="2" Content="移除" Margin="7,0,0,0"
+                                    Style="{StaticResource SecondaryButton}" Click="RemoveDeepSeekKey_Click"/>
+                        </Grid>
+                        <TextBlock x:Name="CloudCredentialStatusText" Foreground="#8FA6A0"
+                                   FontSize="11" Margin="0,0,0,5"/>
                         <CheckBox x:Name="GuiDetectorCheck" Content="增强模式使用 GUI 视觉检测器"/>
                         <Grid Margin="0,8,0,8">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="135"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

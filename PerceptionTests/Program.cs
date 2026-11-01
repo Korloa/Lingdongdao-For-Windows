@@ -5,6 +5,7 @@ using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using LingDongDao.Perception;
 using ActivityEvent = LingDongDao.Perception.ActivityEvent;
 using System.Windows.Threading;
@@ -85,6 +86,40 @@ LocalAssessment firstError = classifier.Classify(errorObservation, memory);
 Check(firstError.EventType == "terminal_error" && firstError.InterventionScore >= 0.8,
     "3 new terminal error is a candidate");
 
+var editorError = Observation(Frame(now.AddSeconds(2), vscode), [errorText]);
+LocalAssessment editorAssessment = classifier.Classify(editorError, new StateMemory());
+Check(editorAssessment.EventType == "application_error" &&
+    editorAssessment.InterventionScore >= 0.6,
+    "3b changed editor error receives meaningful score");
+var typingEditor = Observation(Frame(now.AddSeconds(2), vscode), [errorText], events:
+    [new ActivityEvent(now, "keyboard_activity", -1, -1)]);
+Check(classifier.Classify(typingEditor, new StateMemory()).InterventionScore < 0.5,
+    "3c typing reduces uncertain editor interruption");
+var browserError = Observation(Frame(now.AddSeconds(2), browser),
+    [new OcrText("404 Not Found", new PixelRect(40, 70, 220, 30), 0.91, now, null)]);
+Check(classifier.Classify(browserError, new StateMemory()).EventType == "browser_error" &&
+    classifier.Classify(browserError, new StateMemory()).InterventionScore >= 0.65,
+    "3d browser failure gets a useful candidate score");
+var dialogError = Observation(Frame(now.AddSeconds(2), vscode), [errorText],
+    [new GuiElement("Error: build failed", "Dialog", new PixelRect(10, 20, 500, 300),
+        true, false, "uia", null)]);
+Check(classifier.Classify(dialogError, new StateMemory()).EventType == "dialog_error",
+    "3e UIA error dialog is recognized");
+var uiaOnlyDialog = Observation(Frame(now.AddSeconds(2), vscode), gui:
+    [new GuiElement("Error", "Dialog", new PixelRect(30, 40, 400, 220),
+        true, false, "uia", null)]);
+Check(classifier.Classify(uiaOnlyDialog, new StateMemory()).EventType == "dialog_error" &&
+    classifier.Classify(uiaOnlyDialog, new StateMemory()).InterventionScore >= 0.8,
+    "3e2 UIA error dialog works when OCR misses text");
+var ordinaryErrorWord = Observation(Frame(now.AddSeconds(2), vscode),
+    [new OcrText("let error = null", new PixelRect(40, 70, 220, 30), 0.95, now, null)]);
+Check(classifier.Classify(ordinaryErrorWord, new StateMemory()).EventType == "none",
+    "3f an error variable name is not a failure");
+var numericCode = Observation(Frame(now.AddSeconds(2), vscode),
+    [new OcrText("const port = 404;", new PixelRect(40, 70, 220, 30), 0.95, now, null)]);
+Check(classifier.Classify(numericCode, new StateMemory()).EventType == "none",
+    "3g HTTP status digits in source code are not a browser failure");
+
 for (int index = 0; index < 10; index++)
     memory.Update(errorObservation with { Time = now.AddSeconds(index) }, firstError);
 Check(memory.RecentCount(firstError.EventKey, now.AddSeconds(10), TimeSpan.FromMinutes(3)) == 10 &&
@@ -105,6 +140,31 @@ DesktopObservation click = Observation(Frame(now, vscode), [buttonText], [button
 Check(click.Candidates.Any(item => item.Type == "control_click" &&
     item.Summary.Contains("运行") && item.IsInference) &&
     click.Ocr[0].GuiElementName == "Button", "6 click bound to GUI and OCR text");
+var clickMemory = new StateMemory();
+LocalAssessment firstClick = classifier.Classify(click, clickMemory);
+for (int index = 0; index < 5; index++)
+    clickMemory.Update(click with { Time = now.AddSeconds(index) }, firstClick);
+LocalAssessment repeatedClick = classifier.Classify(click with { Time = now.AddSeconds(6) }, clickMemory);
+Check(firstClick.InterventionScore < 0.5 && repeatedClick.EventType == "repeated_action" &&
+    repeatedClick.InterventionScore >= 0.8,
+    "6b repeated GUI action raises score without flagging first click");
+clickMemory.MarkHelped(repeatedClick.EventKey, now.AddSeconds(6));
+Check(classifier.Classify(click with { Time = now.AddSeconds(7) }, clickMemory)
+    .InterventionScore < 0.2, "6c recent help suppresses repeated action");
+
+string credentialTestPath = Path.Combine(Path.GetTempPath(),
+    "lingdongdao-dpapi-test-" + Guid.NewGuid().ToString("N"));
+try
+{
+    AgentCredentialStore.Save("test-only-secret", credentialTestPath);
+    Check(AgentCredentialStore.Load(credentialTestPath) == "test-only-secret" &&
+        !Encoding.UTF8.GetString(File.ReadAllBytes(credentialTestPath)).Contains("test-only-secret"),
+        "6d API key store encrypts for current Windows user");
+    AgentCredentialStore.Save("replacement-only", credentialTestPath);
+    Check(AgentCredentialStore.Load(credentialTestPath) == "replacement-only",
+        "6e API key can be rotated without changing settings JSON");
+}
+finally { AgentCredentialStore.Delete(credentialTestPath); }
 
 var frames = new FrameRingBuffer();
 CapturedFrame before = Frame(now.AddSeconds(-3), terminal);
@@ -113,14 +173,42 @@ frames.Add(before, 30, 8);
 frames.Add(current, 30, 8);
 DesktopObservation packaged = Observation(current, [errorText]);
 var gate = new CloudEscalationGate();
+Check(gate.CanEscalate(packaged, firstError, options, now, out _) &&
+    gate.CallsToday == 0, "7a dry-run gate does not spend budget");
 Check(gate.TryReserve(packaged, firstError, options, now, out _),
-    "7a local gate accepts a qualified event");
-CloudEventPackage? cloudPackage = PrivacyFilter.Build(packaged, firstError, frames, memory, options);
+    "7a2 local gate accepts a qualified event");
+string ledgerTestPath = Path.Combine(Path.GetTempPath(),
+    "lingdongdao-ledger-test-" + Guid.NewGuid().ToString("N") + ".json");
+try
+{
+    var diskGate = new CloudEscalationGate(ledgerTestPath);
+    Check(diskGate.TryReserve(packaged, firstError, options, now, out _),
+        "7a3 disk gate records a cloud reservation");
+    var restoredGate = new CloudEscalationGate(ledgerTestPath);
+    var anotherEvent = firstError with { EventKey = "different-event" };
+    var tinyBudget = options.Clone();
+    tinyBudget.DailyCloudBudgetUsd = options.EstimatedCostPerCallUsd;
+    Check(restoredGate.CallsToday == 1 &&
+        !restoredGate.TryReserve(packaged, firstError, options, now.AddSeconds(1), out _) &&
+        !restoredGate.TryReserve(packaged, anotherEvent, tinyBudget, now.AddSeconds(1), out _),
+        "7a4 restart preserves duplicate and daily budget limits");
+    File.WriteAllText(ledgerTestPath, "invalid ledger");
+    Check(!new CloudEscalationGate(ledgerTestPath).CanEscalate(
+        packaged, anotherEvent, options, now.AddSeconds(2), out string ledgerReason) &&
+        ledgerReason == "ledger_unavailable", "7a5 damaged budget ledger blocks cloud calls");
+}
+finally { if (File.Exists(ledgerTestPath)) File.Delete(ledgerTestPath); }
+CloudEventPackage? cloudPackage = PrivacyFilter.Build(packaged, firstError, frames, memory, options, []);
 var mock = new MockCloudAgent();
 if (cloudPackage is not null) await mock.DecideAsync(cloudPackage, CancellationToken.None);
 Check(cloudPackage is { CurrentJpeg.Length: > 0, BeforeJpeg.Length: > 0 } &&
     mock.CallCount == 1 && cloudPackage.Ocr.Count > 0,
     "7b cloud package retains screenshots and context");
+Check(PrivacyFilter.Build(packaged, firstError, frames, memory, options)?.BeforeJpeg is null &&
+    PrivacyFilter.Build(packaged, firstError, frames, memory, options,
+        [new OcrText("token=abcdefghijklmnop", new PixelRect(10, 10, 120, 20),
+            0.9, now, null)])?.BeforeJpeg is null,
+    "7b2 prior screenshot needs a separate privacy scan");
 var handler = new MockApiHandler();
 using (var cloudClient = new ConfigurableCloudAgent(handler,
            "https://mock.invalid/v1/chat/completions", "mock-vision", "test-only"))
@@ -166,6 +254,52 @@ catch (HttpRequestException)
 using Process process = Process.GetCurrentProcess();
 Console.WriteLine($"PERFORMANCE tests_process_mb={process.WorkingSet64 / 1048576.0:0.0} " +
                   $"cpu_seconds={process.TotalProcessorTime.TotalSeconds:0.00} frames_mb={frames.Bytes / 1048576.0:0.00}");
+
+if (args.Contains("--deepseek-smoke"))
+{
+    using var deepSeek = new ConfigurableCloudAgent();
+    Check(deepSeek.Available && deepSeek.Model == "deepseek-flash",
+        "10 DeepSeek V4.1 Flash credential and model configured");
+    CloudDecision? realDecision = await deepSeek.DecideAsync(cloudPackage!, CancellationToken.None);
+    Check(realDecision is { Reason.Length: > 0 },
+        "11 real DeepSeek multimodal request returns structured JSON");
+    Console.WriteLine($"DEEPSEEK_SMOKE model={deepSeek.Model} " +
+        $"intervene={realDecision!.ShouldIntervene} suggestion_length={realDecision.Suggestion.Length}");
+}
+
+if (args.Contains("--settings-smoke"))
+{
+    Exception? uiFailure = null;
+    var uiThread = new Thread(() =>
+    {
+        try
+        {
+            _ = new System.Windows.Application
+            { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
+            Assembly assembly = typeof(LingDongDao.MainWindow).Assembly;
+            Type settingsType = assembly.GetType("LingDongDao.AppSettings", true)!;
+            Type panelType = assembly.GetType("LingDongDao.SettingsWindow", true)!;
+            object settings = Activator.CreateInstance(settingsType, nonPublic: true)!;
+            using var service = new PerceptionService(() => new PerceptionOptions());
+            var constructor = panelType.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+                .Single(item => item.GetParameters().Length == 5);
+            var panel = (System.Windows.Window)constructor.Invoke(
+                [settings, null, null, null, service]);
+            panelType.GetMethod("RefreshPerceptionStatus", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(panel, null);
+            var status = (System.Windows.Controls.TextBlock)panel.FindName("CloudCredentialStatusText")!;
+            Check(panel.FindName("DeepSeekKeyBox") is System.Windows.Controls.PasswordBox &&
+                panel.FindName("PerceptionLogBox") is System.Windows.Controls.TextBox &&
+                status.Text.Contains("deepseek-flash"),
+                "12 WPF settings loads DeepSeek key controls and cloud status");
+        }
+        catch (Exception exception) { uiFailure = exception; }
+    });
+    uiThread.SetApartmentState(ApartmentState.STA);
+    uiThread.Start();
+    uiThread.Join();
+    if (uiFailure is not null) throw uiFailure;
+}
 
 if (args.Contains("--live-smoke"))
 {

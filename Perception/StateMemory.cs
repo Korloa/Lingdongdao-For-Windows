@@ -15,6 +15,11 @@ public sealed class StateMemory
             now - episode.Last <= period ? episode.Count : 0;
     }
 
+    public TimeSpan EpisodeAge(string key, DateTimeOffset now) =>
+        _events.TryGetValue(key, out Episode? episode) &&
+        now - episode.Last <= TimeSpan.FromMinutes(3)
+            ? now - episode.First : TimeSpan.Zero;
+
     public bool RecentlyHelped(string key, DateTimeOffset now, TimeSpan period) =>
         _helped.TryGetValue(key, out DateTimeOffset time) && now - time <= period;
 

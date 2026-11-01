@@ -1,4 +1,4 @@
-#define AppVersion "0.6.0"
+#define AppVersion "0.7.0"
 #define AppName "灵动岛"
 
 [Setup]
@@ -38,6 +38,7 @@ Source: "..\perception_py\ocr_worker.py"; DestDir: "{app}\perception_py"
 Source: "..\perception_py\gui_worker.py"; DestDir: "{app}\perception_py"
 Source: "..\perception_py\requirements.txt"; DestDir: "{app}\perception_py"
 Source: "..\scripts\setup-perception.ps1"; DestDir: "{app}\scripts"
+Source: "..\scripts\set-deepseek-key.ps1"; DestDir: "{app}\scripts"
 
 [Icons]
 Name: "{group}\灵动岛"; Filename: "{app}\LingDongDao.exe"

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Net.Http;
 
 namespace LingDongDao.Perception;
 
@@ -14,7 +15,7 @@ public sealed class PerceptionService : IDisposable
     private readonly PythonGuiDetector _gui = new();
     private readonly RuleClassifier _classifier = new();
     private readonly ConfigurableCloudAgent _cloud = new();
-    private readonly CloudEscalationGate _gate = new();
+    private readonly CloudEscalationGate _gate = new(CloudEscalationGate.DefaultLedgerPath);
     private readonly FrameRingBuffer _frames = new();
     private readonly StateMemory _memory = new();
     private readonly Queue<PerceptionLog> _logs = new();
@@ -40,6 +41,8 @@ public sealed class PerceptionService : IDisposable
     public event Action<CloudDecision>? Suggested;
     public string CurrentProcess { get; private set; } = "—";
     public LocalAssessment? LastAssessment { get; private set; }
+    public LocalAssessment? LastMeaningfulAssessment { get; private set; }
+    public DateTimeOffset LastMeaningfulTime { get; private set; }
     public int CloudCallsToday => _gate.CallsToday;
     public long FrameBytes => _frames.Bytes;
     public int FrameCount => _frames.Count;
@@ -47,6 +50,8 @@ public sealed class PerceptionService : IDisposable
     public string OcrStatus => _ocr.Status;
     public string GuiStatus => _gui.Status;
     public bool CloudConfigured => _cloud.Available;
+    public string CloudModel => _cloud.Model;
+    public string CloudLastStatus { get; private set; } = "未验证";
     public double WorkerMb => _ocr.WorkerMb + _gui.WorkerMb;
 
     public PerceptionService(Func<PerceptionOptions> options) => _options = options;
@@ -196,17 +201,56 @@ public sealed class PerceptionService : IDisposable
             LocalAssessment assessment = _classifier.Classify(observation, _memory);
             _memory.Update(observation, assessment);
             LastAssessment = assessment;
+            if (assessment.EventType != "none" && assessment.InterventionScore >= 0.3)
+            {
+                LastMeaningfulAssessment = assessment;
+                LastMeaningfulTime = now;
+            }
             Assessed?.Invoke(assessment);
             Log("info", "local", assessment.EventType,
-                $"app={window.ProcessName} score={assessment.InterventionScore:0.00} reason={string.Join(',', change.Reasons)}");
+                $"app={window.ProcessName} score={assessment.InterventionScore:0.00} " +
+                $"reason={assessment.Reason} trigger={string.Join(',', change.Reasons)}");
             if (!options.CloudEnabled || !options.UploadConsent || !_cloud.Available)
                 continue;
             if (assessment.EventType == "none" ||
                 assessment.InterventionScore < options.EscalationThreshold) continue;
-            CloudEventPackage? package = PrivacyFilter.Build(observation, assessment,
-                _frames, _memory, options);
+            if (!_gate.CanEscalate(observation, assessment, options, now, out string initialReason))
+            {
+                Log("info", "gate", "blocked", initialReason);
+                continue;
+            }
+            // Incremental OCR may miss a secret elsewhere in the visible window.
+            if (!_ocr.Available)
+            {
+                Log("warn", "privacy", "blocked", "Full-window OCR is unavailable");
+                continue;
+            }
+            PixelRect fullWindow = window.Bounds.Intersect(frame.Display.Bounds);
+            if (fullWindow.Width < 10 || fullWindow.Height < 10) continue;
+            IReadOnlyList<OcrText> fullText = await _ocr.RecognizeAsync(
+                CropToJpeg(frame, fullWindow), fullWindow, frame.Time, cancellationToken);
+            if (!_ocr.Available)
+            {
+                Log("warn", "privacy", "blocked", "Full-window OCR failed");
+                continue;
+            }
+            IReadOnlyList<OcrText>? beforeText = null;
+            CapturedFrame? priorFrame = _frames.Before(frame.Time, frame.Display.Id,
+                TimeSpan.FromSeconds(12));
+            if (priorFrame?.Foreground?.Handle == window.Handle &&
+                priorFrame.Foreground.Bounds == window.Bounds &&
+                priorFrame.Display.Bounds == frame.Display.Bounds &&
+                !controls.Any(item => item.IsPassword))
+            {
+                beforeText = await _ocr.RecognizeAsync(CropToJpeg(priorFrame, fullWindow),
+                    fullWindow, priorFrame.Time, cancellationToken);
+                if (!_ocr.Available) beforeText = null;
+            }
+            DesktopObservation uploadObservation = observation with { Ocr = fullText };
+            CloudEventPackage? package = PrivacyFilter.Build(uploadObservation, assessment,
+                _frames, _memory, options, beforeText);
             if (package is null) { Log("warn", "privacy", "blocked", "Package not safe to build"); continue; }
-            if (!_gate.TryReserve(observation, assessment, options, now, out string reason))
+            if (!_gate.TryReserve(uploadObservation, assessment, options, now, out string reason))
             {
                 if (assessment.InterventionScore >= options.EscalationThreshold)
                     Log("info", "gate", "blocked", reason);
@@ -215,7 +259,13 @@ public sealed class PerceptionService : IDisposable
             try
             {
                 CloudDecision? decision = await _cloud.DecideAsync(package, cancellationToken);
-                if (decision is null) { Log("warn", "cloud", "unavailable", "API not configured or no response"); continue; }
+                if (decision is null)
+                {
+                    CloudLastStatus = "响应为空";
+                    Log("warn", "cloud", "unavailable", "API not configured or no response");
+                    continue;
+                }
+                CloudLastStatus = "连接成功";
                 Log("info", "cloud", "decision", decision.ShouldIntervene ? "suggest" : "do_not_interrupt");
                 if (decision.ShouldIntervene && !string.IsNullOrWhiteSpace(decision.Suggestion))
                 {
@@ -224,7 +274,11 @@ public sealed class PerceptionService : IDisposable
                 }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
-            { Log("warn", "cloud", "request_failed", exception.GetType().Name); }
+            {
+                CloudLastStatus = exception is HttpRequestException http && http.StatusCode.HasValue
+                    ? $"HTTP {(int)http.StatusCode.Value}" : exception.GetType().Name;
+                Log("warn", "cloud", "request_failed", CloudLastStatus);
+            }
         }
         if (periodic) _lastFullScan = now;
     }

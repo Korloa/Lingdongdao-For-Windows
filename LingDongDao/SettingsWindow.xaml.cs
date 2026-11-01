@@ -50,8 +50,14 @@ public partial class SettingsWindow : Window
     private void RefreshPerceptionStatus()
     {
         var score = _perception.LastAssessment;
+        var recent = DateTimeOffset.UtcNow - _perception.LastMeaningfulTime <= TimeSpan.FromMinutes(2)
+            ? _perception.LastMeaningfulAssessment : null;
         PerceptionStatusText.Text = $"状态：{(_perception.IsRunning ? "运行中" : "已停止")}  ·  当前软件：{_perception.CurrentProcess}" +
-            $"\n最近事件：{score?.EventType ?? "—"}  ·  本地介入分：{score?.InterventionScore.ToString("0.00") ?? "—"}";
+            $"\n当前判断：{score?.EventType ?? "—"}  ·  介入分：{score?.InterventionScore.ToString("0.00") ?? "—"}" +
+            $"\n最近待关注：{recent?.EventType ?? "—"}  ·  介入分：{recent?.InterventionScore.ToString("0.00") ?? "—"}";
+        CloudCredentialStatusText.Text = _perception.CloudConfigured
+            ? $"{_perception.CloudModel} · 密钥已配置 · {_perception.CloudLastStatus}"
+            : $"{_perception.CloudModel} · 未配置密钥";
         var (mb, cpu) = _perception.ResourceUsage();
         PerceptionResourceText.Text = $"进程合计 {mb + _perception.WorkerMb:0} MB（主进程 {mb:0} MB）· CPU {cpu:0.0}% · 截图缓存 {_perception.FrameCount} 张 / {_perception.FrameBytes / 1048576.0:0.0} MB" +
             $"\n云端调用 {_perception.CloudCallsToday} 次 · OCR: {_perception.OcrStatus} · GUI: {_perception.GuiStatus}";
@@ -73,6 +79,30 @@ public partial class SettingsWindow : Window
     {
         _perception.ClearFrames();
         RefreshPerceptionStatus();
+    }
+
+    private void SaveDeepSeekKey_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            AgentCredentialStore.Save(DeepSeekKeyBox.Password);
+            DeepSeekKeyBox.Clear();
+            RefreshPerceptionStatus();
+            ErrorText.Text = "密钥已加密保存。";
+        }
+        catch (Exception exception)
+        {
+            DeepSeekKeyBox.Clear();
+            ErrorText.Text = "密钥保存失败：" + exception.GetType().Name;
+        }
+    }
+
+    private void RemoveDeepSeekKey_Click(object sender, RoutedEventArgs e)
+    {
+        AgentCredentialStore.Delete();
+        DeepSeekKeyBox.Clear();
+        RefreshPerceptionStatus();
+        ErrorText.Text = "本机密钥已移除。";
     }
 
     internal void NavigateToPerception() => Dispatcher.BeginInvoke(

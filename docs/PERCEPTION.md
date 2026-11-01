@@ -10,7 +10,11 @@
 
 `UiAutomationReader` 读取有界深度的控件树；密码控件只保留边界框。OCR 优先针对变化区域；窗口切换或周期扫描回退到前台窗口。`ObservationFusion` 关联 OCR、控件与点击，区分观测事实和推断事件。`StateMemory` 在内存里维护最近活动、任务类别、同一错误的持续次数和帮助冷却。`RuleClassifier` 输出活动、事件、重要性、介入分、置信度与理由；分数是**未训练、未校准的启发式调度分**，不是模型概率。`ILocalClassifier` 是后续替换为 fastText/ONNX 分类器的接口；目前没有标注样本，因此没有训练模型。
 
-`CloudEscalationGate` 检查阈值（默认 0.8）、相似事件 15 分钟去重、冷却时间、每小时调用数、每日预估费用预算、敏感窗口及上传授权。`PrivacyFilter` 只裁剪当前活动窗口，遮挡 UIA 密码字段；识别到密钥样式文字、敏感窗口或 UIA 信息缺失时拒绝上传。前一帧仅在窗口句柄相同且当前没有密码字段时纳入。云端包保留 JPEG 原始视觉信息，同时附 OCR/GUI 坐标、交互、记忆及评分。`ConfigurableCloudAgent` 使用可配置的兼容 Chat Completions 多模态接口；密钥只从环境变量读取，不写入日志。云端不可用时本地循环继续运行。
+`CloudEscalationGate` 检查阈值（默认 0.8）、相似事件 15 分钟去重、冷却时间、每小时调用数、每日预估费用预算、敏感窗口及上传授权。门控先做不扣额度的检查；只有候选事件通过后，才对**整个活动窗口重新做 OCR**，检查画面其他位置的密钥文字，然后构建事件包并扣除预估额度。`PrivacyFilter` 只裁剪当前活动窗口，遮挡 UIA 密码字段；识别到密钥样式文字、敏感窗口或 UIA 信息缺失时拒绝上传。前一帧只有在窗口位置、句柄一致、当前没有密码字段，且前一帧也经过单独的完整 OCR 隐私检查时才纳入。云端包保留 JPEG 原始视觉信息，同时附 OCR/GUI 坐标、交互、记忆及评分。云端不可用时本地循环继续运行。
+
+云端调用额度记录持久化于 `%LOCALAPPDATA%\LingDongDao\cloud-usage.json`，只含调用时间、事件哈希和预估费用，不含截图、OCR 或密钥。重启后仍执行去重、每小时次数及每日预算限制；记录损坏或无法读取时会停止云端调用，避免意外突破预算。
+
+本地评分覆盖终端、编辑器、浏览器和 UIA 错误弹窗，以及重复点击。编辑器仍在输入时降低不确定事件分数；同一事件持续出现或重复操作时提高分数；提供过相似建议后降低分数。控制面板同时显示**当前判断**与最近 2 分钟的**待关注事件**，避免正常画面覆盖刚发现的高分问题。分数仍是规则启发式值，正常活动会保持低分。
 
 ## 运行与依赖
 
@@ -33,17 +37,23 @@ dotnet run --project .\LingDongDao\LingDongDao.csproj -c Release
 
 ### 云端配置
 
-先配置**支持图片+文字输入**且兼容 Chat Completions 的端点，再在面板里单独确认上传授权：
+默认使用 DeepSeek 的 `https://api.deepseek.com/chat/completions` 和模型 `deepseek-flash`。官方文档确认它是 V4.1 Flash 的当前 API 名称，支持图片加文字输入及 JSON 输出：[模型说明](https://api-docs.deepseek.com/updates/)、[图片输入格式](https://api-docs.deepseek.com/guides/vision/)。在设置面板的“桌面感知”区域输入密钥并点“保存密钥”，密钥会以 Windows 当前用户 DPAPI 加密保存在 `%LOCALAPPDATA%\LingDongDao\agent-key.dpapi`，不会写入 `settings.json`、源码或日志。也可以在本地交互式运行：
 
 ```powershell
-$env:LINGDONGDAO_AGENT_BASE_URL = 'https://example.invalid/v1/chat/completions'
+.\scripts\set-deepseek-key.ps1
+```
+
+面板里的“移除”或脚本的 `-Remove` 可撤销本机密钥。DPAPI 文件只供官方 `api.deepseek.com` HTTPS 端点读取；如改用其他兼容服务，需显式设置该服务自己的密钥和完整端点：
+
+```powershell
+$env:LINGDONGDAO_AGENT_BASE_URL = 'https://your-provider.example/v1/chat/completions'
 $env:LINGDONGDAO_AGENT_MODEL = 'your-vision-model'
 $env:LINGDONGDAO_AGENT_API_KEY = 'set-in-your-shell-or-secure-user-env'
 ```
 
-`BASE_URL` 是完整请求端点。请在私有系统环境或安全配置里设置真实密钥，不要写入源码、提交记录或截图。环境变量在程序启动时读取，修改后重启程序。默认每小时最多 3 次、每日预估费用上限 0.25 美元、每次预估 0.02 美元、冷却 300 秒；这些是保守的本地估算，**不是供应商真实账单**。当前设置面板仅暴露阈值、采样和开关，更多限额可编辑 `%LOCALAPPDATA%\LingDongDao\settings.json` 的 `Perception` 对象。
+`BASE_URL` 是完整请求端点。不要把真实密钥写入源码、提交记录或截图。环境变量在程序启动时读取，修改后重启程序。DeepSeek 默认启用非思考模式做简短决策，避免默认长思考消耗输出预算；仍保留图片直接输入和 JSON 响应。默认每小时最多 3 次、每日预估费用上限 0.25 美元、每次预估 0.02 美元、冷却 300 秒；这些是保守的本地估算，**不是供应商真实账单**。当前设置面板暴露阈值、采样和开关，更多限额可编辑 `%LOCALAPPDATA%\LingDongDao\settings.json` 的 `Perception` 对象。
 
-云端端点只接受 HTTPS，或本机回环地址的 HTTP Mock 服务。真实供应商仍需使用其支持图片输入的兼容接口，并在目标供应商上单独验证。
+云端端点只接受 HTTPS，或本机回环地址的 HTTP Mock 服务。首次允许截图上传仍须在面板单独确认。
 
 ## 模型选型与限制
 
@@ -61,11 +71,13 @@ GUI 检测输出的 `interactive_region` 只是模型认为可交互的区域，
 ```powershell
 dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release
 dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --live-smoke
+dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --deepseek-smoke
+dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --settings-smoke
 .\scripts\measure-perception.ps1
 .\scripts\measure-perception.ps1 -Enhanced
 ```
 
-离线回放覆盖正常浏览、Chrome→VS Code、单行局部变化、首次报错和重复去重、滚动抑制、GUI/OCR 点击关联、截图云端包、未授权/敏感窗口/密钥/预算拦截、云端失效及真实 HTTP 序列化的 Mock 响应。`--live-smoke` 读取当前屏幕；资源脚本会真实采样桌面并在 `reports/` 写 JSON，**不会写截图**。请在不含敏感内容的桌面运行实测。Mock 接口只验证请求结构和图片传输；没有真实 API 凭据，因此真实供应商请求尚未验证。
+离线回放覆盖正常浏览、Chrome→VS Code、单行局部变化、终端/编辑器/网页/弹窗报错、输入抑制、重复操作、GUI/OCR 点击关联、截图云端包、未授权/敏感窗口/密钥/预算拦截、跨重启额度、云端失效、DPAPI 加密及 HTTP Mock 响应。`--settings-smoke` 在独立测试进程加载 WPF 面板和密钥控件，不关闭正在运行的灵动岛。`--live-smoke` 读取当前屏幕；资源脚本会真实采样桌面并在 `reports/` 写 JSON，**不会写截图**。请在不含敏感内容的桌面运行实测。`--deepseek-smoke` 使用合成截图发起一次真实 API 请求，会消耗少量额度，但**不会上传当前桌面画面**。2026-11-01 已在本机以合成截图验证 DeepSeek 返回结构化 JSON；真实桌面事件触发云端的完整链路仍需实际事件验证。
 
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
@@ -79,6 +91,7 @@ dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --li
 | `Perception/ScreenCapture.cs`, `ChangeDetector.cs`, `WindowsActivity.cs`, `UiAutomationReader.cs` | 采集和初筛 |
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
 | `Perception/CloudEscalationGate.cs`, `PrivacyAndCloud.cs` | 预算门控、隐私过滤、多模态 JSON 请求及 Mock |
+| `Perception/AgentCredentialStore.cs` | Windows 当前用户 DPAPI 密钥存储 |
 | `Perception/PerceptionService.cs` | 后台调度、日志、UI 事件、暂停和清空缓存 |
 | `perception_py/ocr_worker.py`, `gui_worker.py` | JSON Lines 内存 IPC；运行时不保存截图 |
 | `PerceptionTests/Program.cs` | 离线回放、Mock HTTP、真实采样及资源检查 |

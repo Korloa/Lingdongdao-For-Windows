@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Perception\Perception.csproj" />
+    <ProjectReference Include="..\LingDongDao\LingDongDao.csproj" />
   </ItemGroup>
 </Project>

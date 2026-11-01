@@ -34,7 +34,7 @@ public static class PrivacyFilter
 
     public static CloudEventPackage? Build(DesktopObservation observation,
         LocalAssessment assessment, FrameRingBuffer frames, StateMemory memory,
-        PerceptionOptions options)
+        PerceptionOptions options, IReadOnlyList<OcrText>? beforeOcr = null)
     {
         if (!options.UploadConsent || !options.CloudEnabled || IsSensitive(observation, options) ||
             observation.MissingModules.Contains("uia") ||
@@ -50,7 +50,10 @@ public static class PrivacyFilter
         CapturedFrame? before = frames.Before(observation.Time, current.Display.Id,
             TimeSpan.FromSeconds(12));
         byte[]? beforeJpeg = before is null || before.Foreground?.Handle != observation.Window.Handle ||
-            sensitive.Length > 0 ? null : CropAndMask(before, crop, sensitive);
+            before.Foreground.Bounds != observation.Window.Bounds ||
+            before.Display.Bounds != current.Display.Bounds || sensitive.Length > 0 ||
+            beforeOcr is null || beforeOcr.Any(item => Secret.IsMatch(item.Text))
+                ? null : CropAndMask(before, crop, sensitive);
         var safeOcr = observation.Ocr.Where(item => !sensitive.Any(rect => rect.Intersects(item.Bounds)))
             .ToArray();
         var safeGui = observation.GuiElements.Select(item => item.IsPassword
@@ -104,25 +107,39 @@ public sealed class ConfigurableCloudAgent : ICloudAgent, IDisposable
     private readonly HttpClient _http;
     private readonly string? _endpoint;
     private readonly string? _model;
-    private readonly string? _key;
+    private readonly string? _keyOverride;
     public ConfigurableCloudAgent(HttpMessageHandler? handler = null, string? endpoint = null,
         string? model = null, string? key = null)
     {
         _http = handler is null ? new HttpClient() : new HttpClient(handler);
         _http.Timeout = TimeSpan.FromSeconds(35);
-        _endpoint = endpoint ?? Environment.GetEnvironmentVariable("LINGDONGDAO_AGENT_BASE_URL");
-        _model = model ?? Environment.GetEnvironmentVariable("LINGDONGDAO_AGENT_MODEL");
-        _key = key ?? Environment.GetEnvironmentVariable("LINGDONGDAO_AGENT_API_KEY");
+        _endpoint = endpoint ?? Environment.GetEnvironmentVariable("LINGDONGDAO_AGENT_BASE_URL") ??
+            "https://api.deepseek.com/chat/completions";
+        _model = model ?? Environment.GetEnvironmentVariable("LINGDONGDAO_AGENT_MODEL") ??
+            "deepseek-flash";
+        _keyOverride = key;
+    }
+    public string Model => _model ?? "";
+    private string? ResolveKey()
+    {
+        string? explicitKey = _keyOverride ??
+            Environment.GetEnvironmentVariable("LINGDONGDAO_AGENT_API_KEY");
+        if (!string.IsNullOrWhiteSpace(explicitKey)) return explicitKey;
+        return Uri.TryCreate(_endpoint, UriKind.Absolute, out Uri? uri) &&
+            uri.Scheme == Uri.UriSchemeHttps &&
+            uri.Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase)
+                ? AgentCredentialStore.Load() : null;
     }
     public bool Available => Uri.TryCreate(_endpoint, UriKind.Absolute, out Uri? endpoint) &&
         (endpoint.Scheme == Uri.UriSchemeHttps ||
          endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback) &&
-        !string.IsNullOrWhiteSpace(_model) && !string.IsNullOrWhiteSpace(_key);
+        !string.IsNullOrWhiteSpace(_model) && !string.IsNullOrWhiteSpace(ResolveKey());
 
     public async Task<CloudDecision?> DecideAsync(CloudEventPackage package,
         CancellationToken cancellationToken)
     {
-        if (!Available) return null;
+        string? apiKey = ResolveKey();
+        if (!Available || string.IsNullOrWhiteSpace(apiKey)) return null;
         var context = new
         {
             package.Time, package.ProcessName, package.WindowTitle,
@@ -138,22 +155,28 @@ public sealed class ConfigurableCloudAgent : ICloudAgent, IDisposable
         if (package.BeforeJpeg is { Length: > 0 } before)
             content.Add(new { type = "image_url", image_url = new { url =
                 "data:image/jpeg;base64," + Convert.ToBase64String(before) } });
-        var body = new
+        var body = new Dictionary<string, object>
         {
-            model = _model,
-            response_format = new { type = "json_object" },
-            max_tokens = 350,
-            messages = new object[]
+            ["model"] = _model!,
+            ["response_format"] = new { type = "json_object" },
+            ["max_tokens"] = 600,
+            ["messages"] = new object[]
             {
                 new { role = "system", content =
-                    "Analyze desktop evidence. Return JSON with should_intervene, reason, suggestion, recommended_action. " +
-                    "Only suggest help for a clear user problem. Do not claim an inferred event is observed fact. " +
+                    "Analyze desktop evidence and return one JSON object only. Example JSON: " +
+                    "{\"should_intervene\":false,\"reason\":\"No clear problem\",\"suggestion\":\"\",\"recommended_action\":null}. " +
+                    "Inspect the screenshot itself; OCR may be incomplete. Only suggest help for a clear user problem. " +
+                    "Distinguish observed facts from inferred events. If intervening, write one Chinese suggestion under 55 characters. " +
                     "Never request computer control or execute actions." },
                 new { role = "user", content }
             }
         };
+        // DeepSeek enables lengthy reasoning by default; a short decision uses non-thinking mode.
+        if (Uri.TryCreate(_endpoint, UriKind.Absolute, out Uri? uri) &&
+            uri.Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase))
+            body["thinking"] = new { type = "disabled" };
         using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _key);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         using HttpResponseMessage response = await _http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -165,8 +188,10 @@ public sealed class ConfigurableCloudAgent : ICloudAgent, IDisposable
         JsonElement root = decision.RootElement;
         bool intervene = root.TryGetProperty("should_intervene", out var property) &&
             property.ValueKind == JsonValueKind.True;
+        string suggestion = Read(root, "suggestion").Trim();
+        if (suggestion.Length > 60) suggestion = suggestion[..59] + "…";
         return new CloudDecision(intervene,
-            Read(root, "reason"), Read(root, "suggestion"), Read(root, "recommended_action"));
+            Read(root, "reason"), suggestion, Read(root, "recommended_action"));
     }
 
     private static string Read(JsonElement root, string key) => root.TryGetProperty(key, out var value) &&
