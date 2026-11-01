@@ -351,6 +351,10 @@
                                    TextWrapping="Wrap" Margin="0,8,0,5"/>
                         <TextBlock x:Name="PerceptionResourceText" Foreground="#9CACAA"
                                    TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <TextBlock Text="在目标窗口按“主动分析”快捷键可立即调用云端；快捷键在下方修改。手动分析会显示结果，即使 AI 判断无需提醒。"
+                                   Foreground="#9CACAA" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <Button Content="查看云端调用记录与截图" Width="190" HorizontalAlignment="Left"
+                                Style="{StaticResource SecondaryButton}" Click="OpenCloudHistory_Click" Margin="0,0,0,8"/>
                         <Button Content="清空内存截图" Width="125" HorizontalAlignment="Left"
                                 Style="{StaticResource SecondaryButton}" Click="ClearFrames_Click"/>
                         <TextBlock Text="感知日志" Foreground="#F4C58A" FontSize="12" Margin="0,14,0,7"/>
@@ -381,6 +385,10 @@
                         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <TextBlock Text="图片压缩" VerticalAlignment="Center" Foreground="#D9E5E1"/>
                             <TextBox x:Name="CompressHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                        </Grid>
+                        <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="主动分析" VerticalAlignment="Center" Foreground="#D9E5E1"/>
+                            <TextBox x:Name="ManualAnalysisHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                         </Grid>
                     </StackPanel>
                 </Border>

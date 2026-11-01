@@ -166,7 +166,9 @@ public sealed class ConfigurableCloudAgent : ICloudAgent, IDisposable
                     "Analyze desktop evidence and return one JSON object only. Example JSON: " +
                     "{\"should_intervene\":false,\"reason\":\"No clear problem\",\"suggestion\":\"\",\"recommended_action\":null}. " +
                     "Inspect the screenshot itself; OCR may be incomplete. Only suggest help for a clear user problem. " +
-                    "Distinguish observed facts from inferred events. If intervening, write one Chinese suggestion under 55 characters. " +
+                    "Distinguish observed facts from inferred events. Write reason and suggestion in Chinese. " +
+                    "If this is a manual_request, briefly describe the current window even when should_intervene is false. " +
+                    "If intervening, write one concise Chinese suggestion. " +
                     "Never request computer control or execute actions." },
                 new { role = "user", content }
             }
@@ -188,10 +190,9 @@ public sealed class ConfigurableCloudAgent : ICloudAgent, IDisposable
         JsonElement root = decision.RootElement;
         bool intervene = root.TryGetProperty("should_intervene", out var property) &&
             property.ValueKind == JsonValueKind.True;
-        string suggestion = Read(root, "suggestion").Trim();
-        if (suggestion.Length > 60) suggestion = suggestion[..59] + "…";
         return new CloudDecision(intervene,
-            Read(root, "reason"), suggestion, Read(root, "recommended_action"));
+            Read(root, "reason"), Read(root, "suggestion").Trim(),
+            Read(root, "recommended_action"), root.GetRawText());
     }
 
     private static string Read(JsonElement root, string key) => root.TryGetProperty(key, out var value) &&

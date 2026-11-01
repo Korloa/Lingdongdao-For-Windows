@@ -16,6 +16,7 @@ public partial class SettingsWindow : Window
     private AppSettings _working;
     private bool _ready;
     private bool _saved;
+    private CloudHistoryWindow? _historyWindow;
 
     internal SettingsWindow(AppSettings current, Func<AppSettings, string?> apply,
         Action<AppSettings> preview, Action cancelPreview, PerceptionService perception)
@@ -69,7 +70,7 @@ public partial class SettingsWindow : Window
     {
         if (!_ready || _working.Perception.UploadConsent) return;
         MessageBoxResult answer = System.Windows.MessageBox.Show(this,
-            "启用后，只有本地评分通过门控时，当前窗口截图、OCR 文字和操作摘要才会发往你配置的云端接口，可能产生 API 费用。是否明确授权截图上传？",
+            "启用后，本地评分达到阈值或你主动按分析快捷键时，当前窗口截图、OCR 文字和操作摘要可能发往你配置的云端接口，并产生 API 费用。是否明确授权截图上传？",
             "授权云端截图上传", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Yes) _working.Perception.UploadConsent = true;
         else CloudUploadCheck.IsChecked = false;
@@ -79,6 +80,17 @@ public partial class SettingsWindow : Window
     {
         _perception.ClearFrames();
         RefreshPerceptionStatus();
+    }
+
+    private void OpenCloudHistory_Click(object sender, RoutedEventArgs e)
+        => ShowCloudHistory();
+
+    internal void ShowCloudHistory()
+    {
+        if (_historyWindow is not null) { _historyWindow.Activate(); return; }
+        _historyWindow = new CloudHistoryWindow(_perception) { Owner = this };
+        _historyWindow.Closed += (_, _) => _historyWindow = null;
+        _historyWindow.Show();
     }
 
     private void SaveDeepSeekKey_Click(object sender, RoutedEventArgs e)
@@ -150,6 +162,7 @@ public partial class SettingsWindow : Window
         FormatHotkeyBox.Text = _working.ImageFormatHotkey;
         StyleHotkeyBox.Text = _working.ImageStyleHotkey;
         CompressHotkeyBox.Text = _working.ImageCompressHotkey;
+        ManualAnalysisHotkeyBox.Text = _working.ManualAnalysisHotkey;
     }
 
     internal void SyncStartup(bool enabled)
@@ -174,7 +187,8 @@ public partial class SettingsWindow : Window
     {
         if (Keyboard.FocusedElement is not System.Windows.Controls.TextBox box ||
             (box != PanelHotkeyBox && box != FormatHotkeyBox &&
-             box != StyleHotkeyBox && box != CompressHotkeyBox)) return false;
+             box != StyleHotkeyBox && box != CompressHotkeyBox &&
+             box != ManualAnalysisHotkeyBox)) return false;
         if (!GlobalHotkey.TryFormatNative(packed & 0xFFFF, packed >> 16, out string value)) return false;
         box.Text = value;
         ErrorText.Text = string.Empty;
@@ -255,6 +269,7 @@ public partial class SettingsWindow : Window
         _working.ImageFormatHotkey = FormatHotkeyBox.Text;
         _working.ImageStyleHotkey = StyleHotkeyBox.Text;
         _working.ImageCompressHotkey = CompressHotkeyBox.Text;
+        _working.ManualAnalysisHotkey = ManualAnalysisHotkeyBox.Text;
         string? error = _apply(_working.Clone());
         if (error is null)
         {

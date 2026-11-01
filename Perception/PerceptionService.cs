@@ -16,6 +16,8 @@ public sealed class PerceptionService : IDisposable
     private readonly RuleClassifier _classifier = new();
     private readonly ConfigurableCloudAgent _cloud = new();
     private readonly CloudEscalationGate _gate = new(CloudEscalationGate.DefaultLedgerPath);
+    private readonly CloudCallHistory _history = new();
+    private readonly SemaphoreSlim _analysisLock = new(1, 1);
     private readonly FrameRingBuffer _frames = new();
     private readonly StateMemory _memory = new();
     private readonly Queue<PerceptionLog> _logs = new();
@@ -39,6 +41,7 @@ public sealed class PerceptionService : IDisposable
     public event Action<PerceptionLog>? Logged;
     public event Action<LocalAssessment>? Assessed;
     public event Action<CloudDecision>? Suggested;
+    public event Action? CloudHistoryChanged;
     public string CurrentProcess { get; private set; } = "—";
     public LocalAssessment? LastAssessment { get; private set; }
     public LocalAssessment? LastMeaningfulAssessment { get; private set; }
@@ -53,6 +56,8 @@ public sealed class PerceptionService : IDisposable
     public string CloudModel => _cloud.Model;
     public string CloudLastStatus { get; private set; } = "未验证";
     public double WorkerMb => _ocr.WorkerMb + _gui.WorkerMb;
+    public IReadOnlyList<CloudCallRecord> CloudHistory() => _history.List(_gate.UsageRecords);
+    public void ClearCloudHistory() { _history.Clear(); CloudHistoryChanged?.Invoke(); }
 
     public PerceptionService(Func<PerceptionOptions> options) => _options = options;
 
@@ -145,7 +150,12 @@ public sealed class PerceptionService : IDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            try { await SampleAsync(cancellationToken); }
+            try
+            {
+                await _analysisLock.WaitAsync(cancellationToken);
+                try { await SampleAsync(cancellationToken); }
+                finally { _analysisLock.Release(); }
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception exception)
             { Log("error", "perception", "sample_failed", exception.GetType().Name + ": " + exception.Message); }
@@ -256,32 +266,132 @@ public sealed class PerceptionService : IDisposable
                     Log("info", "gate", "blocked", reason);
                 continue;
             }
-            try
+            ManualAnalysisResult result = await CallCloudAsync(package, false, now, cancellationToken);
+            if (result.Decision is { ShouldIntervene: true } decision &&
+                !string.IsNullOrWhiteSpace(decision.Suggestion))
             {
-                CloudDecision? decision = await _cloud.DecideAsync(package, cancellationToken);
-                if (decision is null)
-                {
-                    CloudLastStatus = "响应为空";
-                    Log("warn", "cloud", "unavailable", "API not configured or no response");
-                    continue;
-                }
-                CloudLastStatus = "连接成功";
-                Log("info", "cloud", "decision", decision.ShouldIntervene ? "suggest" : "do_not_interrupt");
-                if (decision.ShouldIntervene && !string.IsNullOrWhiteSpace(decision.Suggestion))
-                {
-                    _memory.MarkHelped(assessment.EventKey, now);
-                    Suggested?.Invoke(decision);
-                }
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                CloudLastStatus = exception is HttpRequestException http && http.StatusCode.HasValue
-                    ? $"HTTP {(int)http.StatusCode.Value}" : exception.GetType().Name;
-                Log("warn", "cloud", "request_failed", CloudLastStatus);
+                _memory.MarkHelped(assessment.EventKey, now);
+                Suggested?.Invoke(decision);
             }
         }
         if (periodic) _lastFullScan = now;
     }
+
+    public async Task<ManualAnalysisResult> AnalyzeNowAsync(CancellationToken cancellationToken = default)
+    {
+        if (_disposed) return new(null, "感知服务已关闭");
+        PerceptionOptions options = _options();
+        options.Normalize();
+        if (!options.CloudEnabled || !options.UploadConsent)
+            return new(null, "请先在控制面板授权云端截图上传");
+        if (!_cloud.Available) return new(null, "请先保存 DeepSeek API 密钥");
+        if (!_ocr.Available) return new(null, "离线 OCR 不可用，无法完成上传前隐私检查");
+        await _analysisLock.WaitAsync(cancellationToken);
+        try
+        {
+            using var activity = new WindowsActivity();
+            WindowInfo? window = activity.Foreground();
+            if (window is null || window.ProcessId == Environment.ProcessId)
+                return new(null, "请切换到需要分析的窗口，再按主动分析快捷键");
+            if (PrivacyFilter.IsSensitive(window, options))
+                return new(null, "当前窗口已被隐私规则排除");
+            IReadOnlyList<CapturedFrame> captured = await Task.Run(() =>
+                _capture.Capture(window), cancellationToken);
+            CapturedFrame? frame = captured.Where(item => item.Display.Bounds.Intersects(window.Bounds))
+                .OrderByDescending(item => item.Display.Bounds.Intersect(window.Bounds).Width *
+                    (long)item.Display.Bounds.Intersect(window.Bounds).Height).FirstOrDefault();
+            if (frame is null) return new(null, "无法截取当前窗口");
+            _frames.Add(frame, options.FrameRetentionSeconds, options.FrameMemoryLimitMb);
+            PixelRect bounds = frame.Display.Bounds.Intersect(window.Bounds);
+            IReadOnlyList<GuiElement> controls = await ReadUiAsync(window, cancellationToken);
+            if (controls.Count == 0) return new(null, "当前窗口无法完成控件隐私检查");
+            IReadOnlyList<OcrText> text = await _ocr.RecognizeAsync(
+                CropToJpeg(frame, bounds), bounds, frame.Time, cancellationToken);
+            if (!_ocr.Available) return new(null, "OCR 隐私检查失败");
+            var change = new ScreenChange(0, [], ["manual_hotkey"], true);
+            DesktopObservation observation = ObservationFusion.Fuse(frame, bounds, controls,
+                text, [], activity.MousePosition(), change, []);
+            var assessment = new LocalAssessment("manual", "manual_request", "用户主动要求分析当前窗口",
+                1, 1, 1, "user_hotkey", "manual:" + Guid.NewGuid().ToString("N"));
+            DateTimeOffset now = frame.Time;
+            if (!_gate.CanEscalate(observation, assessment, options, now, out string gateReason, true))
+                return new(null, GateMessage(gateReason));
+            CloudEventPackage? package = PrivacyFilter.Build(observation, assessment,
+                _frames, _memory, options);
+            if (package is null) return new(null, "当前窗口未通过隐私检查，未上传截图");
+            if (!_gate.TryReserve(observation, assessment, options, now, out gateReason, true))
+                return new(null, GateMessage(gateReason));
+            return await CallCloudAsync(package, true, now, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        { return new(null, "分析已取消"); }
+        catch (Exception exception)
+        {
+            Log("warn", "manual", "failed", exception.GetType().Name);
+            return new(null, "主动分析失败：" + exception.GetType().Name);
+        }
+        finally { _analysisLock.Release(); }
+    }
+
+    private async Task<ManualAnalysisResult> CallCloudAsync(CloudEventPackage package,
+        bool userInitiated, DateTimeOffset reservedAt, CancellationToken cancellationToken)
+    {
+        var record = new CloudCallRecord(Guid.NewGuid().ToString("N"), package.Time,
+            userInitiated, package.ProcessName, package.WindowTitle,
+            package.Assessment.EventSummary, package.Assessment.EventKey,
+            package.Assessment.InterventionScore,
+            "pending", null, "", "", null, "", "", package.CurrentJpeg, package.BeforeJpeg);
+        try { _history.Save(record); CloudHistoryChanged?.Invoke(); }
+        catch (Exception exception)
+        {
+            Log("warn", "history", "save_failed", exception.GetType().Name);
+            return new(null, "无法保存调用记录，本次未发送截图");
+        }
+        CloudDecision? decision;
+        try { decision = await _cloud.DecideAsync(package, cancellationToken); }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            CloudLastStatus = exception is HttpRequestException http && http.StatusCode.HasValue
+                ? $"HTTP {(int)http.StatusCode.Value}" : exception.GetType().Name;
+            record = record with { Status = "error", Error = CloudLastStatus };
+            try { _history.Save(record); CloudHistoryChanged?.Invoke(); }
+            catch (Exception saveException) { Log("warn", "history", "save_failed", saveException.GetType().Name); }
+            Log("warn", "cloud", "request_failed", CloudLastStatus);
+            return new(null, "云端请求失败：" + CloudLastStatus);
+        }
+        if (decision is null)
+        {
+            CloudLastStatus = "响应为空";
+            record = record with { Status = "empty", Error = "模型未返回可解析的内容" };
+            Log("warn", "cloud", "empty", "Model returned no structured decision");
+        }
+        else
+        {
+            CloudLastStatus = "连接成功";
+            if (!_gate.MarkDecision(reservedAt, package.Assessment.EventKey,
+                decision.ShouldIntervene))
+                Log("warn", "gate", "decision_not_saved", "Cloud result could not update budget ledger");
+            record = record with { Status = "success", ShouldIntervene = decision.ShouldIntervene,
+                Reason = decision.Reason, Suggestion = decision.Suggestion,
+                RecommendedAction = decision.RecommendedAction,
+                RawResponse = decision.RawJson ?? "" };
+            Log("info", "cloud", "decision", decision.ShouldIntervene ? "suggest" : "do_not_interrupt");
+        }
+        try { _history.Save(record); CloudHistoryChanged?.Invoke(); }
+        catch (Exception exception)
+        { Log("warn", "history", "save_failed", exception.GetType().Name); }
+        return new(decision, decision is null ? "模型没有返回可用的分析结果" : "分析完成");
+    }
+
+    private static string GateMessage(string reason) => reason switch
+    {
+        "daily_budget" => "今日云端费用预算已用尽，可在设置中调整预算",
+        "ledger_unavailable" => "调用额度记录不可用，已停止云端请求",
+        "sensitive_window" => "当前窗口已被隐私规则排除",
+        "upload_not_authorized" => "请先授权云端截图上传",
+        "ledger_write_failed" => "调用额度记录保存失败，本次未上传",
+        _ => "云端调用被限制：" + reason
+    };
 
     private async Task<IReadOnlyList<GuiElement>> ReadUiAsync(WindowInfo window,
         CancellationToken cancellationToken)

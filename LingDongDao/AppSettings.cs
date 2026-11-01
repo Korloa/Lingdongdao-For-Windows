@@ -34,6 +34,7 @@ internal sealed class AppSettings
     public string ImageFormatHotkey { get; set; } = "Ctrl+0";
     public string ImageStyleHotkey { get; set; } = "Ctrl+1";
     public string ImageCompressHotkey { get; set; } = "Ctrl+2";
+    public string ManualAnalysisHotkey { get; set; } = "Ctrl+Alt+J";
     public bool StartWithWindows { get; set; }
 
     public bool ChargingEnabled { get; set; } = true;
@@ -114,6 +115,7 @@ internal sealed class AppSettings
         ImageFormatHotkey = GlobalHotkey.CanonicalOrDefault(ImageFormatHotkey, "Ctrl+0");
         ImageStyleHotkey = GlobalHotkey.CanonicalOrDefault(ImageStyleHotkey, "Ctrl+1");
         ImageCompressHotkey = GlobalHotkey.CanonicalOrDefault(ImageCompressHotkey, "Ctrl+2");
+        ManualAnalysisHotkey = GlobalHotkey.CanonicalOrDefault(ManualAnalysisHotkey, "Ctrl+Alt+J");
     }
 }
 

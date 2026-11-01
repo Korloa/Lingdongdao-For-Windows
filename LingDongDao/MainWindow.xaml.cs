@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private const int ConvertHotkeyId = 0x11D1;
     private const int StyleHotkeyId = 0x11D2;
     private const int CompressHotkeyId = 0x11D3;
+    private const int ManualAnalysisHotkeyId = 0x11D4;
     private const int WmHotkey = 0x0312;
 
     private AppSettings _settings;
@@ -79,6 +80,7 @@ public partial class MainWindow : Window
     private DateTime _ignoreIslandClickUntilUtc;
     private DateTime _imageZoomHoldUntilUtc;
     private DateTime _hoverExpandHoldUntilUtc;
+    private bool _manualAnalysisBusy;
 
     private enum EditTool { None, Draw, Crop, Compress, Style }
     private sealed record EditSnapshot(BitmapSource Image, byte[]? EncodedBytes, string Extension, long SourceBytes);
@@ -396,7 +398,35 @@ public partial class MainWindow : Window
             OpenPicker(PickerOperation.Compress);
             handled = true;
         }
+        else if (message == WmHotkey && wParam.ToInt32() == ManualAnalysisHotkeyId)
+        {
+            TriggerManualAnalysis();
+            handled = true;
+        }
         return IntPtr.Zero;
+    }
+
+    private async void TriggerManualAnalysis()
+    {
+        if (_manualAnalysisBusy) return;
+        _manualAnalysisBusy = true;
+        ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+            "AI 正在分析", "正在检查当前窗口与上传权限…"), false, true);
+        try
+        {
+            ManualAnalysisResult result = await _perception.AnalyzeNowAsync();
+            string detail = result.Decision is { } decision
+                ? (decision.ShouldIntervene && !string.IsNullOrWhiteSpace(decision.Suggestion)
+                    ? decision.Suggestion : decision.Reason)
+                : result.Status;
+            if (string.IsNullOrWhiteSpace(detail)) detail = "本次没有发现明确需要提醒的事项";
+            if (detail.Length > 66) detail = detail[..65] + "…";
+            ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                result.Decision is null ? "AI 分析未完成" : "AI 分析完成", detail), false, true);
+            _closeTimer.Interval = TimeSpan.FromSeconds(Math.Max(8, CurrentVisualSettings.NoticeSeconds));
+            _closeTimer.Start();
+        }
+        finally { _manualAnalysisBusy = false; }
     }
 
     private static (int Id, string Name, string Gesture, bool Enabled)[] HotkeyBindings(AppSettings settings) =>
@@ -404,7 +434,8 @@ public partial class MainWindow : Window
         (HotkeyId, "控制面板", settings.Hotkey, true),
         (ConvertHotkeyId, "图片格式", settings.ImageFormatHotkey, settings.ImageConversionEnabled),
         (StyleHotkeyId, "图片风格", settings.ImageStyleHotkey, settings.ImageStyleEnabled),
-        (CompressHotkeyId, "图片压缩", settings.ImageCompressHotkey, settings.ImageCompressionEnabled)
+        (CompressHotkeyId, "图片压缩", settings.ImageCompressHotkey, settings.ImageCompressionEnabled),
+        (ManualAnalysisHotkeyId, "主动分析", settings.ManualAnalysisHotkey, true)
     ];
 
     private bool TrySetHotkeys(AppSettings settings, out string? error)
@@ -504,6 +535,12 @@ public partial class MainWindow : Window
     {
         if (_pickerOpen || DateTime.UtcNow < _ignoreIslandClickUntilUtc) return;
         if (_currentKind == NoticeKind.Music) return;
+        if (_currentKind == NoticeKind.AgentSuggestion)
+        {
+            OpenPerceptionSettings();
+            _settingsWindow?.ShowCloudHistory();
+            return;
+        }
         ShowCharging(_powerMonitor.Current);
     }
 
@@ -1391,11 +1428,11 @@ public partial class MainWindow : Window
 
     private void ShowNotice(IslandNotice notice) => ShowNoticeCore(notice, false);
 
-    private void ShowNoticeCore(IslandNotice notice, bool preview)
+    private void ShowNoticeCore(IslandNotice notice, bool preview, bool force = false)
     {
         if (_imageEditing) return;
         if (_pickerOpen && !preview) return;
-        if (!preview && CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
+        if (!preview && !force && CurrentVisualSettings.DisplayMode != IslandDisplayMode.Automatic) return;
         HideImagePreview();
         _closeTimer.Stop();
         _hoverExpanded = false;

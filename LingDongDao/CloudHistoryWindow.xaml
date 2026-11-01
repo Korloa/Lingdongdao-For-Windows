@@ -1,0 +1,69 @@
+<Window x:Class="LingDongDao.CloudHistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="云端调用记录" Width="1020" Height="720" MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterOwner" Background="#111B1E" Foreground="#F3F0E9"
+        FontFamily="Microsoft YaHei UI" FontSize="13">
+    <Grid Margin="18">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="250"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="3" Margin="0,0,0,14">
+            <TextBlock Text="云端调用记录" FontSize="20" FontWeight="SemiBold"/>
+            <TextBlock Text="记录仅保存在本机，截图与回复由 Windows 当前用户加密；最多保留最近 100 次。旧版调用无法补回截图和回复。"
+                       Foreground="#9CACAA" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+        </StackPanel>
+        <Border Grid.Row="1" Grid.Column="0" BorderBrush="#344547" BorderThickness="1" Background="#0B1517">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Bottom" Margin="10">
+                    <Button Content="刷新记录" Padding="8,6" Margin="0,0,0,6"
+                            Click="Refresh_Click" Background="#263638" Foreground="#E8F1ED" BorderBrush="#526461"/>
+                    <Button Content="清空本机记录" Padding="8,6" Click="Clear_Click"
+                            Background="#263638" Foreground="#E8F1ED" BorderBrush="#526461"/>
+                </StackPanel>
+                <ListBox x:Name="CallsList" SelectionChanged="CallsList_SelectionChanged"
+                         Background="Transparent" Foreground="#E8F1ED" BorderThickness="0"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="7,5">
+                                <TextBlock Text="{Binding Time, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" FontSize="11" Foreground="#F4C58A"/>
+                                <TextBlock Text="{Binding ProcessName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding StatusLabel}" FontSize="11" Foreground="#A5D1C6"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+        <ScrollViewer Grid.Row="1" Grid.Column="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock x:Name="RecordMeta" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                <TextBlock x:Name="RecordStatus" Foreground="#A5D1C6" Margin="0,6,0,12" TextWrapping="Wrap"/>
+                <TextBlock Text="发送的当前窗口截图" Foreground="#F4C58A" Margin="0,0,0,7"/>
+                <Border Background="#080F11" BorderBrush="#344547" BorderThickness="1" Padding="5">
+                    <Image x:Name="CurrentScreenshot" MaxHeight="420" Stretch="Uniform"/>
+                </Border>
+                <TextBlock x:Name="ScreenshotNote" Foreground="#9CACAA" Margin="0,6,0,14" TextWrapping="Wrap"/>
+                <StackPanel x:Name="BeforeSection" Visibility="Collapsed">
+                    <TextBlock Text="同时发送的事件前截图" Foreground="#F4C58A" Margin="0,0,0,7"/>
+                    <Border Background="#080F11" BorderBrush="#344547" BorderThickness="1" Padding="5" Margin="0,0,0,14">
+                        <Image x:Name="BeforeScreenshot" MaxHeight="300" Stretch="Uniform"/>
+                    </Border>
+                </StackPanel>
+                <TextBlock Text="AI 判断" Foreground="#F4C58A" Margin="0,0,0,6"/>
+                <TextBlock x:Name="DecisionText" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <TextBlock Text="AI 原因" Foreground="#F4C58A" Margin="0,0,0,6"/>
+                <TextBlock x:Name="ReasonText" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <TextBlock Text="AI 建议" Foreground="#F4C58A" Margin="0,0,0,6"/>
+                <TextBlock x:Name="SuggestionText" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <TextBlock Text="建议操作" Foreground="#F4C58A" Margin="0,0,0,6"/>
+                <TextBlock x:Name="ActionText" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <TextBlock Text="完整模型回复" Foreground="#F4C58A" Margin="0,0,0,6"/>
+                <TextBox x:Name="RawResponseText" IsReadOnly="True" TextWrapping="Wrap"
+                         Background="#080F11" Foreground="#C6D7D2" BorderBrush="#344547"
+                         MinHeight="55" MaxHeight="240" VerticalScrollBarVisibility="Auto" Margin="0,0,0,12"/>
+                <TextBlock x:Name="ErrorText" Foreground="#FFAC8B" TextWrapping="Wrap"/>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>

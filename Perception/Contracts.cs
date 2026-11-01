@@ -47,7 +47,9 @@ public sealed record LocalAssessment(string Activity, string EventType, string E
     string Reason, string EventKey, bool IsCalibrated = false);
 
 public sealed record CloudDecision(bool ShouldIntervene, string Reason, string Suggestion,
-    string? RecommendedAction);
+    string? RecommendedAction, string? RawJson = null);
+
+public sealed record ManualAnalysisResult(CloudDecision? Decision, string Status);
 
 public sealed record PerceptionLog(DateTimeOffset Time, string Level, string Module,
     string Event, string Summary);

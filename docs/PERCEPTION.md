@@ -1,6 +1,6 @@
 # 桌面主动感知模块
 
-本模块接入现有 LingDongDao WPF 程序的设置面板和灵动岛提醒。默认关闭。本地截图、Windows 事件、UI Automation、离线 OCR、可选 GUI 检测、状态记忆与规则评分均不访问付费 API。只有用户在面板中明确授权截图上传、配置多模态接口，并且本地门控通过后，才可能发出云端请求。云端只返回建议，不执行电脑操作。
+本模块接入现有 LingDongDao WPF 程序的设置面板和灵动岛提醒。默认关闭。本地截图、Windows 事件、UI Automation、离线 OCR、可选 GUI 检测、状态记忆与规则评分均不访问付费 API。只有用户在面板中明确授权截图上传、配置多模态接口，并且本地门控通过后，才可能发出云端请求。用户也可以主动按快捷键触发分析。云端只返回建议，不执行电脑操作。
 
 ## 已实现的数据流
 
@@ -12,7 +12,15 @@
 
 `CloudEscalationGate` 检查阈值（默认 0.8）、相似事件 15 分钟去重、冷却时间、每小时调用数、每日预估费用预算、敏感窗口及上传授权。门控先做不扣额度的检查；只有候选事件通过后，才对**整个活动窗口重新做 OCR**，检查画面其他位置的密钥文字，然后构建事件包并扣除预估额度。`PrivacyFilter` 只裁剪当前活动窗口，遮挡 UIA 密码字段；识别到密钥样式文字、敏感窗口或 UIA 信息缺失时拒绝上传。前一帧只有在窗口位置、句柄一致、当前没有密码字段，且前一帧也经过单独的完整 OCR 隐私检查时才纳入。云端包保留 JPEG 原始视觉信息，同时附 OCR/GUI 坐标、交互、记忆及评分。云端不可用时本地循环继续运行。
 
+若云端对某个事件明确返回“不提醒”，同一事件在随后 2 小时内不会再次自动上传，减少重复调用；手动分析不受这项抑制影响。
+
 云端调用额度记录持久化于 `%LOCALAPPDATA%\LingDongDao\cloud-usage.json`，只含调用时间、事件哈希和预估费用，不含截图、OCR 或密钥。重启后仍执行去重、每小时次数及每日预算限制；记录损坏或无法读取时会停止云端调用，避免意外突破预算。
+
+### 主动分析与调用记录
+
+默认在目标软件窗口按 **Ctrl+Alt+J** 主动分析当前窗口，可在“启动与快捷键”修改。手动请求无需等待本地分数达到阈值，也不受自动去重、冷却和每小时次数限制；仍须已授权上传、配置密钥，通过当前窗口完整 OCR 与 UIA 隐私检查，并受每日费用预算约束。感知暂停时也可手动分析。手动分析无论模型判断是否需要打断，都会在灵动岛显示简短结果；详细内容在设置面板的“查看云端调用记录与截图”中。
+
+每次真正向云端发出的请求从新版开始保存实际发送的当前窗口 JPEG、可选事件前 JPEG、结构化判断、建议、完整 JSON 回复或失败状态。记录由 Windows 当前用户 DPAPI 加密保存在 `%LOCALAPPDATA%\LingDongDao\cloud-history`，最多保留最近 100 次，可在记录窗口清空；云端额度账本会继续保留。旧版的调用只保存了时间与预估费用，无法补回截图或模型回复，记录窗口会明确标记。内存截图缓存与调用记录是两份独立数据；“清空内存截图”不会删除已保存的调用记录。
 
 本地评分覆盖终端、编辑器、浏览器和 UIA 错误弹窗，以及重复点击。编辑器仍在输入时降低不确定事件分数；同一事件持续出现或重复操作时提高分数；提供过相似建议后降低分数。控制面板同时显示**当前判断**与最近 2 分钟的**待关注事件**，避免正常画面覆盖刚发现的高分问题。分数仍是规则启发式值，正常活动会保持低分。
 
@@ -77,7 +85,7 @@ dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --se
 .\scripts\measure-perception.ps1 -Enhanced
 ```
 
-离线回放覆盖正常浏览、Chrome→VS Code、单行局部变化、终端/编辑器/网页/弹窗报错、输入抑制、重复操作、GUI/OCR 点击关联、截图云端包、未授权/敏感窗口/密钥/预算拦截、跨重启额度、云端失效、DPAPI 加密及 HTTP Mock 响应。`--settings-smoke` 在独立测试进程加载 WPF 面板和密钥控件，不关闭正在运行的灵动岛。`--live-smoke` 读取当前屏幕；资源脚本会真实采样桌面并在 `reports/` 写 JSON，**不会写截图**。请在不含敏感内容的桌面运行实测。`--deepseek-smoke` 使用合成截图发起一次真实 API 请求，会消耗少量额度，但**不会上传当前桌面画面**。2026-11-01 已在本机以合成截图验证 DeepSeek 返回结构化 JSON；真实桌面事件触发云端的完整链路仍需实际事件验证。
+离线回放覆盖正常浏览、Chrome→VS Code、单行局部变化、终端/编辑器/网页/弹窗报错、输入抑制、重复操作、GUI/OCR 点击关联、截图云端包、未授权/敏感窗口/密钥/预算拦截、跨重启额度、手动请求绕过自动频控但保留每日预算、加密调用记录、旧版记录占位、云端失效、DPAPI 加密及 HTTP Mock 响应。`--settings-smoke` 在独立测试进程加载 WPF 设置面板和调用记录窗口，不关闭正在运行的灵动岛。`--live-smoke` 读取当前屏幕；资源脚本会真实采样桌面并在 `reports/` 写 JSON，**不会写截图**。请在不含敏感内容的桌面运行实测。`--deepseek-smoke` 使用合成截图发起一次真实 API 请求，会消耗少量额度，但**不会上传当前桌面画面**。2026-11-01 已用合成截图验证 DeepSeek 返回结构化 JSON；随后实际按主动分析快捷键验证了调用、完整回复和截图写入加密记录。该次测试窗口未抢到系统焦点，实际上传的是当时的 `thunder` 活动窗口；对自动事件的灵动岛提醒仍需按模型真正返回建议的场景进一步观察。
 
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
@@ -90,6 +98,7 @@ dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --se
 | `Perception/Contracts.cs` | `DesktopObservation`、截图/窗口/GUI/OCR/事件/评分结构，`IOcrEngine`、`IGuiDetector`、`ILocalClassifier`、`ICloudAgent` |
 | `Perception/ScreenCapture.cs`, `ChangeDetector.cs`, `WindowsActivity.cs`, `UiAutomationReader.cs` | 采集和初筛 |
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
+| `Perception/CloudCallHistory.cs`, `LingDongDao/CloudHistoryWindow.xaml` | 本机加密调用记录及截图、完整回复查看 |
 | `Perception/CloudEscalationGate.cs`, `PrivacyAndCloud.cs` | 预算门控、隐私过滤、多模态 JSON 请求及 Mock |
 | `Perception/AgentCredentialStore.cs` | Windows 当前用户 DPAPI 密钥存储 |
 | `Perception/PerceptionService.cs` | 后台调度、日志、UI 事件、暂停和清空缓存 |

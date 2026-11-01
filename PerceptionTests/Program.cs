@@ -184,6 +184,8 @@ try
     var diskGate = new CloudEscalationGate(ledgerTestPath);
     Check(diskGate.TryReserve(packaged, firstError, options, now, out _),
         "7a3 disk gate records a cloud reservation");
+    Check(diskGate.MarkDecision(now, firstError.EventKey, false),
+        "7a3b a cloud decision is saved in the usage ledger");
     var restoredGate = new CloudEscalationGate(ledgerTestPath);
     var anotherEvent = firstError with { EventKey = "different-event" };
     var tinyBudget = options.Clone();
@@ -192,6 +194,21 @@ try
         !restoredGate.TryReserve(packaged, firstError, options, now.AddSeconds(1), out _) &&
         !restoredGate.TryReserve(packaged, anotherEvent, tinyBudget, now.AddSeconds(1), out _),
         "7a4 restart preserves duplicate and daily budget limits");
+    Check(!restoredGate.CanEscalate(packaged, firstError, options,
+            now.AddMinutes(20), out string declinedReason) &&
+        declinedReason == "cloud_declined_recently",
+        "7a4a cloud rejection suppresses repeat auto calls after restart");
+    var manualEvent = firstError with { EventType = "manual_request", EventKey = "manual-test",
+        InterventionScore = 1 };
+    var hourlyLimited = options.Clone();
+    hourlyLimited.CloudCallsPerHour = 1;
+    Check(!restoredGate.CanEscalate(packaged, manualEvent, hourlyLimited,
+            now.AddSeconds(2), out _) &&
+        restoredGate.TryReserve(packaged, manualEvent, hourlyLimited,
+            now.AddSeconds(2), out _, userInitiated: true) &&
+        !restoredGate.TryReserve(packaged, manualEvent with { EventKey = "manual-next" },
+            tinyBudget, now.AddSeconds(3), out _, userInitiated: true),
+        "7a4b manual request bypasses automatic rate limits but keeps daily budget");
     File.WriteAllText(ledgerTestPath, "invalid ledger");
     Check(!new CloudEscalationGate(ledgerTestPath).CanEscalate(
         packaged, anotherEvent, options, now.AddSeconds(2), out string ledgerReason) &&
@@ -204,6 +221,37 @@ if (cloudPackage is not null) await mock.DecideAsync(cloudPackage, CancellationT
 Check(cloudPackage is { CurrentJpeg.Length: > 0, BeforeJpeg.Length: > 0 } &&
     mock.CallCount == 1 && cloudPackage.Ocr.Count > 0,
     "7b cloud package retains screenshots and context");
+string historyTestFolder = Path.Combine(Path.GetTempPath(),
+    "lingdongdao-history-test-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var history = new CloudCallHistory(historyTestFolder);
+    var call = new CloudCallRecord(Guid.NewGuid().ToString("N"), now, true,
+        "test-app", "test-window", "manual_request", "manual-test", 1, "pending", null,
+        "", "", null, "", "", cloudPackage!.CurrentJpeg, null);
+    history.Save(call);
+    history.Save(call with { Status = "success", ShouldIntervene = false,
+        Reason = "synthetic-model-reply", RawResponse = "{\"reason\":\"synthetic-model-reply\"}" });
+    CloudCallRecord restored = history.List()[0];
+    string encryptedPath = Path.Combine(historyTestFolder, call.Id + ".bin");
+    Check(restored.CurrentJpeg!.SequenceEqual(cloudPackage.CurrentJpeg) &&
+        restored.Reason == "synthetic-model-reply" &&
+        !Encoding.UTF8.GetString(File.ReadAllBytes(encryptedPath)).Contains("synthetic-model-reply") &&
+        history.List([new CloudUsageRecord(now.AddMinutes(-1), "old", 0.02)]).Count == 2 &&
+        history.List([new CloudUsageRecord(now.AddSeconds(-1), "manual-test", 0.02)]).Count == 1,
+        "7b1 encrypted call history keeps screenshot and full reply; legacy calls remain visible");
+    history.Clear();
+    Check(history.List([new CloudUsageRecord(now.AddMinutes(-1), "old", 0.02)]).Count == 0 &&
+        !File.Exists(encryptedPath), "7b1b clearing history removes encrypted screenshots");
+}
+finally
+{
+    if (Directory.Exists(historyTestFolder))
+    {
+        foreach (string path in Directory.GetFiles(historyTestFolder)) File.Delete(path);
+        Directory.Delete(historyTestFolder);
+    }
+}
 Check(PrivacyFilter.Build(packaged, firstError, frames, memory, options)?.BeforeJpeg is null &&
     PrivacyFilter.Build(packaged, firstError, frames, memory, options,
         [new OcrText("token=abcdefghijklmnop", new PixelRect(10, 10, 120, 20),
@@ -290,8 +338,17 @@ if (args.Contains("--settings-smoke"))
             var status = (System.Windows.Controls.TextBlock)panel.FindName("CloudCredentialStatusText")!;
             Check(panel.FindName("DeepSeekKeyBox") is System.Windows.Controls.PasswordBox &&
                 panel.FindName("PerceptionLogBox") is System.Windows.Controls.TextBox &&
+                panel.FindName("ManualAnalysisHotkeyBox") is System.Windows.Controls.TextBox &&
                 status.Text.Contains("deepseek-flash"),
                 "12 WPF settings loads DeepSeek key controls and cloud status");
+            Type historyType = assembly.GetType("LingDongDao.CloudHistoryWindow", true)!;
+            var historyPanel = (System.Windows.Window)Activator.CreateInstance(historyType,
+                BindingFlags.Instance | BindingFlags.NonPublic, null, [service], null)!;
+            Check(historyPanel.FindName("CallsList") is System.Windows.Controls.ListBox &&
+                historyPanel.FindName("CurrentScreenshot") is System.Windows.Controls.Image &&
+                historyPanel.FindName("RawResponseText") is System.Windows.Controls.TextBox,
+                "13 WPF call history loads screenshots and complete response controls");
+            historyPanel.Close();
         }
         catch (Exception exception) { uiFailure = exception; }
     });
