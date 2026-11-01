@@ -102,7 +102,7 @@ public sealed class MockCloudAgent : ICloudAgent
     }
 }
 
-public sealed class ConfigurableCloudAgent : ICloudAgent, IDisposable
+public sealed partial class ConfigurableCloudAgent : ICloudAgent, IDisposable
 {
     private readonly HttpClient _http;
     private readonly string? _endpoint;

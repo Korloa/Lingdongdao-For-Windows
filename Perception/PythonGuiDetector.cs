@@ -43,13 +43,10 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
         }
     }
 
-    private static string PythonPath => Environment.GetEnvironmentVariable("LINGDONGDAO_PYTHON") ??
-        (File.Exists(Path.Combine(AppContext.BaseDirectory, ".venv", "Scripts", "python.exe"))
-            ? Path.Combine(AppContext.BaseDirectory, ".venv", "Scripts", "python.exe") : "python");
+    private static string PythonPath => PythonRuntime.PythonPath;
     private static string WorkerPath => Path.Combine(AppContext.BaseDirectory,
         "perception_py", "gui_worker.py");
-    private static string ModelPath => Environment.GetEnvironmentVariable("LINGDONGDAO_GUI_MODEL") ??
-        Path.Combine(AppContext.BaseDirectory, "models", "gpa", "model.onnx");
+    private static string ModelPath => PythonRuntime.ModelPath;
     public bool Available => !_failed && File.Exists(WorkerPath) && File.Exists(ModelPath);
 
     public async Task<IReadOnlyList<GuiElement>> DetectAsync(byte[] image, PixelRect screenBounds,

@@ -1,6 +1,6 @@
 # 桌面主动感知模块
 
-本模块接入现有 LingDongDao WPF 程序的设置面板和灵动岛提醒。默认关闭。本地截图、Windows 事件、UI Automation、离线 OCR、可选 GUI 检测、状态记忆与规则评分均不访问付费 API。只有用户在面板中明确授权截图上传、配置多模态接口，并且本地门控通过后，才可能发出云端请求。用户也可以主动按快捷键触发分析。云端只返回建议，不执行电脑操作。
+本模块接入现有 LingDongDao WPF 程序的设置面板和灵动岛提醒。默认关闭。本地截图、Windows 事件、UI Automation、离线 OCR、可选 GUI 检测、状态记忆与规则评分均不访问付费 API。只有用户在面板中明确授权截图上传、配置多模态接口，并且本地门控通过后，才可能发出云端请求。用户也可以主动按快捷键触发分析。普通分析只返回建议；用户明确填写目标并启动 Agent 循环后，才会执行受限的鼠标工具。
 
 ## 已实现的数据流
 
@@ -22,6 +22,14 @@
 
 每次真正向云端发出的请求从新版开始保存实际发送的当前窗口 JPEG、可选事件前 JPEG、结构化判断、建议、完整 JSON 回复或失败状态。记录由 Windows 当前用户 DPAPI 加密保存在 `%LOCALAPPDATA%\LingDongDao\cloud-history`，最多保留最近 100 次，可在记录窗口清空；云端额度账本会继续保留。旧版的调用只保存了时间与预估费用，无法补回截图或模型回复，记录窗口会明确标记。内存截图缓存与调用记录是两份独立数据；“清空内存截图”不会删除已保存的调用记录。
 
+### Agent 操作循环
+
+在“桌面感知”的“Agent 操作循环”输入 3～300 字的任务目标并保存，切换到目标软件后按 **Ctrl+Alt+Shift+L** 启动；按 **Ctrl+Alt+Shift+X** 或面板“停止当前 Agent”随时中止，两组快捷键可修改。任务目标只保留在当前程序进程内，重启需重新填写。每轮流程是：完整窗口隐私检查与截图 → DeepSeek 工具调用选择 `click`、`right_click` 或 `finish` → 本地校验前台窗口、屏幕坐标和密码控件 → 执行一次鼠标动作 → 暂时显示点击文字和 `X/Y` 物理像素坐标 → 隐藏标记后重新截图 → 把工具执行结果及新截图送回云端。云端仅在看到新画面并选择 `finish(success=true)` 时宣布完成。
+
+Agent 仅操作启动时的进程；切换到其他软件、隐私检查失败、云端异常或用户中止都会停止。默认最多执行 8 次鼠标动作、最长运行 5 分钟；最后一次动作后仍可让模型查看新截图。控制面板可调步数和每日预估云端预算；每轮云端判断都占用一次预算额度。步数或预算耗尽时停止并显示未完成，避免无限点击或无限扣费。Agent 不提供键盘输入、文件修改或命令执行工具。每轮截图和工具回复会作为加密云端调用记录保存。当前实现只支持左键单击和右键单击，不能完成需要输入文字、拖拽或跨进程切换的任务。
+
+DeepSeek 的 `deepseek-flash` 支持图片和函数工具调用：[视觉输入](https://api-docs.deepseek.com/guides/vision/)、[工具调用](https://api-docs.deepseek.com/guides/tool_calls/)。由于该 Chat Completions 接口的图片放在 `user` 消息里，程序先回传工具结果，再发送包含新截图的下一条 `user` 消息。工具参数仍由本地校验，云端返回的坐标不直接信任。
+
 本地评分覆盖终端、编辑器、浏览器和 UIA 错误弹窗，以及重复点击。编辑器仍在输入时降低不确定事件分数；同一事件持续出现或重复操作时提高分数；提供过相似建议后降低分数。控制面板同时显示**当前判断**与最近 2 分钟的**待关注事件**，避免正常画面覆盖刚发现的高分问题。分数仍是规则启发式值，正常活动会保持低分。
 
 ## 运行与依赖
@@ -35,13 +43,15 @@ dotnet run --project .\LingDongDao\LingDongDao.csproj -c Release
 
 若 Python 不在 `PATH`，运行 `.\scripts\setup-perception.ps1 -Python 'C:\path\python.exe'`。脚本使用官方 PyPI 创建项目内 `.venv`，安装 `perception_py/requirements.txt`。在设置面板“桌面感知”中开启感知、暂停/恢复、关闭云端上传、切换资源模式、调整采样间隔和阈值；面板展示当前软件、事件、评分、调用次数、进程合计内存、CPU 与黑底结构化日志。虚拟环境、模型、报告、截图均不加入 Git。
 
+设置侧栏每项是独立页面。“桌面感知”页在 OCR/GUI 状态下有“屏幕调试标注”开关，保存后会以穿透式、不会抢焦点且排除系统截图的窗口，在各识别框上标注 OCR 文字、GUI 类型和物理像素坐标。该开关默认关闭；关闭感知或切换敏感窗口时隐藏。GUI 视觉检测框只有在增强模式、启用检测器且模型可用时才会出现；UI Automation 控件仍可作为 GUI 标注。“提醒与天气”页显示 Open-Meteo 当前温度、WMO 天气描述、数据更新时间和未来雷雨查询状态，可手动刷新。[当前天气字段说明](https://open-meteo.com/en/docs)。
+
 默认 **低负载** 模式为窗口 API、UIA、按变化/兜底运行 OCR、规则评分；**标准** 模式更频繁运行 OCR；**增强** 模式增加按需 GUI 检测。GUI 检测须额外执行：
 
 ```powershell
 .\scripts\setup-perception.ps1 -WithGui
 ```
 
-该步骤下载官方权重、核对 SHA-256，再使用 Ultralytics 开发依赖导出 320×320 ONNX。模型与导出依赖体积较大，因此不属于默认安装。已有 ONNX 可通过环境变量 `LINGDONGDAO_GUI_MODEL` 指定。若从发布版 EXE 运行，仍须将 Python 环境和 `perception_py` 脚本准备在程序目录旁，或设置 `LINGDONGDAO_PYTHON` 为 Python 解释器绝对路径；仓库源码运行会自动找到项目 `.venv`。本版安装包的 OCR/GUI Python 运行时**尚未打包**，不能把它当成免配置的完整感知安装包。
+该步骤下载官方权重、核对 SHA-256，再使用 Ultralytics 开发依赖导出 320×320 ONNX。模型与导出依赖体积较大，因此不属于默认安装。已有 ONNX 可通过环境变量 `LINGDONGDAO_GUI_MODEL` 指定。若从发布版 EXE 运行，仍须将 Python 环境和 `perception_py` 脚本准备在程序目录旁，或设置 `LINGDONGDAO_PYTHON` 为 Python 解释器绝对路径；仓库源码及测试运行会向上寻找项目 `.venv` 和 `models/gpa/model.onnx`。本版安装包的 OCR/GUI Python 运行时**尚未打包**，不能把它当成免配置的完整感知安装包。
 
 ### 云端配置
 
@@ -80,12 +90,15 @@ GUI 检测输出的 `interactive_region` 只是模型认为可交互的区域，
 dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release
 dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --live-smoke
 dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --deepseek-smoke
+dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --agent-tool-smoke
 dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --settings-smoke
 .\scripts\measure-perception.ps1
 .\scripts\measure-perception.ps1 -Enhanced
 ```
 
-离线回放覆盖正常浏览、Chrome→VS Code、单行局部变化、终端/编辑器/网页/弹窗报错、输入抑制、重复操作、GUI/OCR 点击关联、截图云端包、未授权/敏感窗口/密钥/预算拦截、跨重启额度、手动请求绕过自动频控但保留每日预算、加密调用记录、旧版记录占位、云端失效、DPAPI 加密及 HTTP Mock 响应。`--settings-smoke` 在独立测试进程加载 WPF 设置面板和调用记录窗口，不关闭正在运行的灵动岛。`--live-smoke` 读取当前屏幕；资源脚本会真实采样桌面并在 `reports/` 写 JSON，**不会写截图**。请在不含敏感内容的桌面运行实测。`--deepseek-smoke` 使用合成截图发起一次真实 API 请求，会消耗少量额度，但**不会上传当前桌面画面**。2026-11-01 已用合成截图验证 DeepSeek 返回结构化 JSON；随后实际按主动分析快捷键验证了调用、完整回复和截图写入加密记录。该次测试窗口未抢到系统焦点，实际上传的是当时的 `thunder` 活动窗口；对自动事件的灵动岛提醒仍需按模型真正返回建议的场景进一步观察。
+离线回放覆盖正常浏览、Chrome→VS Code、单行局部变化、终端/编辑器/网页/弹窗报错、输入抑制、重复操作、GUI/OCR 点击关联、截图云端包、未授权/敏感窗口/密钥/预算拦截、跨重启额度、手动请求绕过自动频控但保留每日预算、加密调用记录、旧版记录占位、云端失效、DPAPI 加密及 HTTP Mock 响应。`--settings-smoke` 在独立测试进程加载 WPF 设置面板和调用记录窗口，并验证独立页面切换、当前天气格式及 OCR/GUI 调试覆盖层，不关闭正在运行的灵动岛。可附加 `--settings-snapshot` 在系统临时目录生成设置界面 PNG 供视觉检查。`--live-smoke` 读取当前屏幕；资源脚本会真实采样桌面并在 `reports/` 写 JSON，**不会写截图**。请在不含敏感内容的桌面运行实测。`--deepseek-smoke` 使用合成截图发起一次真实 API 请求，会消耗少量额度，但**不会上传当前桌面画面**。2026-11-01 已用合成截图验证 DeepSeek 返回结构化 JSON；随后实际按主动分析快捷键验证了调用、完整回复和截图写入加密记录。该次测试窗口未抢到系统焦点，实际上传的是当时的 `thunder` 活动窗口；对自动事件的灵动岛提醒仍需按模型真正返回建议的场景进一步观察。
+
+Agent 离线回放覆盖点击、右键参数解析、窗口和坐标校验、工具结果加新截图回传、成功结束、步数耗尽停止；`--agent-tool-smoke` 用合成 JPEG 请求一次真实 DeepSeek 函数工具调用，不执行鼠标动作。本机已验证模型返回可解析的 `finish` 调用。WPF 烟测验证坐标浮层能显示文字和物理坐标、不会激活抢焦点、使用穿透式窗口样式。`--live-service-enhanced --live-debug` 已实测产生 84 个 OCR 区域和 58 个融合 GUI 控件区域，调试覆盖层在 WPF 烟测中验证了点击穿透及 Windows 截图排除。尚未在用户指定的真实任务软件里验证自动点击结果，因此不能把合成测试视为真实任务完成率证明。
 
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
@@ -99,6 +112,11 @@ dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --se
 | `Perception/ScreenCapture.cs`, `ChangeDetector.cs`, `WindowsActivity.cs`, `UiAutomationReader.cs` | 采集和初筛 |
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
 | `Perception/CloudCallHistory.cs`, `LingDongDao/CloudHistoryWindow.xaml` | 本机加密调用记录及截图、完整回复查看 |
+| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentMouseTool.cs`, `PerceptionService.Agent.cs` | Agent 循环、云端函数工具、鼠标执行与运行控制 |
+| `LingDongDao/AgentActionOverlay.cs` | 点击位置文字和坐标浮层 |
+| `LingDongDao/PerceptionDebugOverlay.cs` | OCR/GUI 识别框与坐标调试浮层，Windows 截图排除 |
+| `LingDongDao/CurrentWeather.cs` | 当前温度、WMO 天气代码及更新时间解析 |
+| `Perception/PythonRuntime.cs` | 源码及测试目录向上寻找本地 Python 和 GUI ONNX 运行时 |
 | `Perception/CloudEscalationGate.cs`, `PrivacyAndCloud.cs` | 预算门控、隐私过滤、多模态 JSON 请求及 Mock |
 | `Perception/AgentCredentialStore.cs` | Windows 当前用户 DPAPI 密钥存储 |
 | `Perception/PerceptionService.cs` | 后台调度、日志、UI 事件、暂停和清空缓存 |

@@ -63,6 +63,7 @@ public sealed class PerceptionOptions
     public bool CloudEnabled { get; set; }
     public bool UploadConsent { get; set; }
     public bool GuiDetectorEnabled { get; set; }
+    public bool DebugOverlayEnabled { get; set; }
     public ResourceMode Mode { get; set; } = ResourceMode.Low;
     public double SampleSeconds { get; set; } = 2;
     public int FrameRetentionSeconds { get; set; } = 30;
@@ -72,6 +73,7 @@ public sealed class PerceptionOptions
     public double DailyCloudBudgetUsd { get; set; } = 0.25;
     public double EstimatedCostPerCallUsd { get; set; } = 0.02;
     public int CooldownSeconds { get; set; } = 300;
+    public int AgentMaxActions { get; set; } = 8;
     public string[] SensitiveProcesses { get; set; } = ["KeePass", "Bitwarden", "1Password", "WindowsSecurityHealthUI"];
     public string[] SensitiveTitleWords { get; set; } = ["密码管理", "password vault", "银行账户"];
 
@@ -93,6 +95,7 @@ public sealed class PerceptionOptions
         DailyCloudBudgetUsd = Math.Clamp(DailyCloudBudgetUsd, 0, 100);
         EstimatedCostPerCallUsd = Math.Clamp(EstimatedCostPerCallUsd, 0.001, 10);
         CooldownSeconds = Math.Clamp(CooldownSeconds, 0, 86400);
+        AgentMaxActions = Math.Clamp(AgentMaxActions, 1, 20);
     }
 }
 

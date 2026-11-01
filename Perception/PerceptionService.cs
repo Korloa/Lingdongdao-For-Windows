@@ -5,7 +5,7 @@ using System.Net.Http;
 
 namespace LingDongDao.Perception;
 
-public sealed class PerceptionService : IDisposable
+public sealed partial class PerceptionService : IDisposable
 {
     private readonly Func<PerceptionOptions> _options;
     private readonly ScreenCapture _capture = new();
@@ -40,6 +40,7 @@ public sealed class PerceptionService : IDisposable
 
     public event Action<PerceptionLog>? Logged;
     public event Action<LocalAssessment>? Assessed;
+    public event Action<DesktopObservation?>? DebugObservation;
     public event Action<CloudDecision>? Suggested;
     public event Action? CloudHistoryChanged;
     public string CurrentProcess { get; private set; } = "—";
@@ -47,6 +48,7 @@ public sealed class PerceptionService : IDisposable
     public LocalAssessment? LastMeaningfulAssessment { get; private set; }
     public DateTimeOffset LastMeaningfulTime { get; private set; }
     public int CloudCallsToday => _gate.CallsToday;
+    public double EstimatedCloudSpendToday => _gate.EstimatedSpentToday;
     public long FrameBytes => _frames.Bytes;
     public int FrameCount => _frames.Count;
     public bool IsRunning => _loop is { IsCompleted: false };
@@ -104,6 +106,7 @@ public sealed class PerceptionService : IDisposable
 
     public void Stop()
     {
+        DebugObservation?.Invoke(null);
         CancellationTokenSource? stopping = _stop;
         stopping?.Cancel();
         if (stopping is not null) _stopping = true;
@@ -168,7 +171,13 @@ public sealed class PerceptionService : IDisposable
     {
         PerceptionOptions options = _options();
         WindowInfo? window = _activity?.Foreground();
-        if (window?.ProcessId == Environment.ProcessId) return;
+        if (window?.ProcessId == Environment.ProcessId)
+        {
+            DebugObservation?.Invoke(null);
+            return;
+        }
+        if (options.DebugOverlayEnabled && PrivacyFilter.IsSensitive(window, options))
+            DebugObservation?.Invoke(null);
         CurrentProcess = window?.ProcessName ?? "—";
         DateTimeOffset now = DateTimeOffset.UtcNow;
         IReadOnlyList<ActivityEvent> events = _activity?.Drain(_lastEvent) ?? [];
@@ -208,6 +217,9 @@ public sealed class PerceptionService : IDisposable
                 missing.Add("gui_detector");
             DesktopObservation observation = ObservationFusion.Fuse(frame, analysis, controls,
                 text, events, mouse, change, missing);
+            if (options.DebugOverlayEnabled)
+                DebugObservation?.Invoke(PrivacyFilter.IsSensitive(observation, options)
+                    ? null : observation);
             LocalAssessment assessment = _classifier.Classify(observation, _memory);
             _memory.Update(observation, assessment);
             LastAssessment = assessment;
@@ -451,6 +463,8 @@ public sealed class PerceptionService : IDisposable
     {
         _disposed = true;
         Task? active = _loop;
+        Task? agent = _agentTask;
+        StopAgent();
         Stop();
         void Release()
         {
@@ -459,8 +473,10 @@ public sealed class PerceptionService : IDisposable
             _cloud.Dispose();
             _frames.Clear();
         }
-        if (active is { IsCompleted: false })
-            _ = active.ContinueWith(_ => Release(), TaskScheduler.Default);
+        var running = new[] { active, agent }.Where(task => task is { IsCompleted: false })
+            .Cast<Task>().ToArray();
+        if (running.Length > 0)
+            _ = Task.WhenAll(running).ContinueWith(_ => Release(), TaskScheduler.Default);
         else Release();
     }
 }

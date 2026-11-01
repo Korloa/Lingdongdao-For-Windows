@@ -28,6 +28,8 @@ public partial class MainWindow : Window
     private const int StyleHotkeyId = 0x11D2;
     private const int CompressHotkeyId = 0x11D3;
     private const int ManualAnalysisHotkeyId = 0x11D4;
+    private const int AgentStartHotkeyId = 0x11D5;
+    private const int AgentStopHotkeyId = 0x11D6;
     private const int WmHotkey = 0x0312;
 
     private AppSettings _settings;
@@ -39,6 +41,8 @@ public partial class MainWindow : Window
     private readonly WeatherMonitor _weatherMonitor;
     private readonly MusicMonitor _musicMonitor;
     private readonly PerceptionService _perception;
+    private AgentActionOverlay? _agentOverlay;
+    private PerceptionDebugOverlay? _debugOverlay;
     private readonly DispatcherTimer _closeTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
     private readonly DispatcherTimer _imageHoverCloseTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     private readonly DispatcherTimer _idleHoverTimer = new() { Interval = TimeSpan.FromMilliseconds(45) };
@@ -90,9 +94,44 @@ public partial class MainWindow : Window
         _settings = SettingsStore.Load();
         _settings.StartWithWindows = StartupManager.IsEnabledForCurrentExecutable();
         _perception = new PerceptionService(() => _settings.Perception);
+        _perception.DebugObservation += observation =>
+        {
+            if (Dispatcher.HasShutdownStarted) return;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (observation is null || !_settings.Perception.DebugOverlayEnabled)
+                { _debugOverlay?.Clear(); return; }
+                _debugOverlay ??= new PerceptionDebugOverlay();
+                _debugOverlay.ShowObservation(observation);
+            }));
+        };
         _perception.Suggested += decision => Dispatcher.BeginInvoke(new Action(() =>
             ShowNotice(new IslandNotice(NoticeKind.AgentSuggestion,
                 "发现可能需要帮助的地方", decision.Suggestion))));
+        _perception.AgentVisual += cue =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                Dispatcher.Invoke(() => ShowAgentVisual(cue));
+        };
+        _perception.AgentBeforeCapture += () =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                Dispatcher.Invoke(() => { _agentOverlay?.HideAction(); Collapse(); });
+        };
+        _perception.AgentCompleted += outcome =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    string detail = string.IsNullOrWhiteSpace(outcome.Summary)
+                        ? outcome.Status : outcome.Summary;
+                    if (detail.Length > 66) detail = detail[..65] + "…";
+                    ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                        outcome.Success ? "Agent 已完成" : "Agent 已停止", detail), false, true);
+                    _closeTimer.Interval = TimeSpan.FromSeconds(Math.Max(8, CurrentVisualSettings.NoticeSeconds));
+                    _closeTimer.Start();
+                }));
+        };
         InitializeComponent();
         Loaded += (_, _) => _perception.Refresh();
         ImageHoverPopup.PlacementTarget = Island;
@@ -169,6 +208,7 @@ public partial class MainWindow : Window
         menu.Items.Add(preview);
         menu.Items.Add("查看检测状态", null, (_, _) => Dispatcher.Invoke(() =>
             Forms.MessageBox.Show(_statusMonitor.GetStatusSummary() +
+                $"\n当前天气：{_weatherMonitor.CurrentStatus}" +
                 $"\n郫都区雷雨预报：{_weatherMonitor.StatusText}" +
                 $"\n音乐：{_musicMonitor.StatusText}", "灵动岛检测状态")));
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -186,7 +226,7 @@ public partial class MainWindow : Window
             _hotkeyHandle = new WindowInteropHelper(this).Handle;
             _hotkeySource = HwndSource.FromHwnd(_hotkeyHandle);
             _hotkeySource?.AddHook(HotkeyWndProc);
-            if (!TrySetHotkeys(_settings, out string? hotkeyError))
+            if (!TrySetHotkeys(_settings, out string? hotkeyError, allowPartial: true))
             {
                 _trayIcon.BalloonTipTitle = "灵动岛快捷键不可用";
                 _trayIcon.BalloonTipText = hotkeyError ?? "请从托盘打开控制面板修改快捷键。";
@@ -209,7 +249,7 @@ public partial class MainWindow : Window
             return;
         }
         _settingsWindow = new SettingsWindow(_settings, ApplySettings, PreviewSettings,
-            CancelSettingsPreview, _perception);
+            CancelSettingsPreview, _perception, _weatherMonitor);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
@@ -219,6 +259,33 @@ public partial class MainWindow : Window
     {
         OpenSettings();
         _settingsWindow?.NavigateToPerception();
+    }
+
+    private void ShowAgentVisual(AgentActionVisual cue)
+    {
+        if (!cue.Visible) { _agentOverlay?.HideAction(); return; }
+        _agentOverlay ??= new AgentActionOverlay();
+        _agentOverlay.ShowAction(cue);
+    }
+
+    private void StartAgentFromHotkey()
+    {
+        if (_pickerOpen || _imageEditing)
+        {
+            ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                "Agent 未启动", "请先结束图片编辑或选择条"), false, true);
+            return;
+        }
+        bool started = _perception.TryStartAgent(_settings.AgentGoal, out string message);
+        ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+            started ? "Agent 已启动" : "Agent 未启动", message), false, true);
+    }
+
+    private void StopAgentFromHotkey()
+    {
+        _perception.StopAgent();
+        ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+            "正在停止 Agent", "当前步骤结束后停止"), false, true);
     }
 
     private void ToggleStartupFromTray()
@@ -268,6 +335,7 @@ public partial class MainWindow : Window
                               candidate.BatteryLowPercent != _settings.BatteryLowPercent;
         _settings = candidate;
         _startupMenuItem.Checked = candidate.StartWithWindows;
+        if (!candidate.Perception.DebugOverlayEnabled) _debugOverlay?.Clear();
         if (_pickerOpen && !PickerEnabled(_pickerOperation)) ClosePicker();
         _previewSettings = null;
         ApplyVisualSettings();
@@ -403,6 +471,16 @@ public partial class MainWindow : Window
             TriggerManualAnalysis();
             handled = true;
         }
+        else if (message == WmHotkey && wParam.ToInt32() == AgentStartHotkeyId)
+        {
+            StartAgentFromHotkey();
+            handled = true;
+        }
+        else if (message == WmHotkey && wParam.ToInt32() == AgentStopHotkeyId)
+        {
+            StopAgentFromHotkey();
+            handled = true;
+        }
         return IntPtr.Zero;
     }
 
@@ -435,10 +513,12 @@ public partial class MainWindow : Window
         (ConvertHotkeyId, "图片格式", settings.ImageFormatHotkey, settings.ImageConversionEnabled),
         (StyleHotkeyId, "图片风格", settings.ImageStyleHotkey, settings.ImageStyleEnabled),
         (CompressHotkeyId, "图片压缩", settings.ImageCompressHotkey, settings.ImageCompressionEnabled),
-        (ManualAnalysisHotkeyId, "主动分析", settings.ManualAnalysisHotkey, true)
+        (ManualAnalysisHotkeyId, "主动分析", settings.ManualAnalysisHotkey, true),
+        (AgentStartHotkeyId, "启动 Agent", settings.AgentStartHotkey, true),
+        (AgentStopHotkeyId, "停止 Agent", settings.AgentStopHotkey, true)
     ];
 
-    private bool TrySetHotkeys(AppSettings settings, out string? error)
+    private bool TrySetHotkeys(AppSettings settings, out string? error, bool allowPartial = false)
     {
         error = null;
         if (_hotkeyHandle == IntPtr.Zero)
@@ -448,23 +528,27 @@ public partial class MainWindow : Window
         }
         var requested = HotkeyBindings(settings);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var valid = new List<(int Id, string Name, string Gesture, bool Enabled)>();
         foreach (var binding in requested)
         {
             if (!GlobalHotkey.TryParse(binding.Gesture, out _, out string canonical))
             {
-                error = $"{binding.Name}快捷键无效，请按 Ctrl、Alt、Shift 或 Win 加字母、数字、方向键或 F1–F12。";
-                return false;
+                error ??= $"{binding.Name}快捷键无效，请按 Ctrl、Alt、Shift 或 Win 加字母、数字、方向键或 F1–F12。";
+                if (!allowPartial) return false;
+                continue;
             }
             if (!seen.Add(canonical))
             {
-                error = $"{canonical} 被多个功能使用，请修改其中一项。";
-                return false;
+                error ??= $"{canonical} 被多个功能使用，请修改其中一项。";
+                if (!allowPartial) return false;
+                continue;
             }
+            valid.Add(binding);
         }
         var previous = _registeredHotkeys.ToArray();
         foreach (var (id, _) in previous) UnregisterHotKey(_hotkeyHandle, id);
         _registeredHotkeys.Clear();
-        foreach (var binding in requested.Where(item => item.Enabled))
+        foreach (var binding in valid.Where(item => item.Enabled))
         {
             GlobalHotkey.TryParse(binding.Gesture, out var chord, out string canonical);
             if (RegisterHotKey(_hotkeyHandle, binding.Id, chord.Modifiers, chord.Key))
@@ -472,7 +556,8 @@ public partial class MainWindow : Window
                 _registeredHotkeys[binding.Id] = canonical;
                 continue;
             }
-            error = $"{canonical} 已被其他程序占用，请换一个快捷键。";
+            error ??= $"{canonical} 已被其他程序占用，请换一个快捷键。";
+            if (allowPartial) continue;
             foreach (int id in _registeredHotkeys.Keys) UnregisterHotKey(_hotkeyHandle, id);
             _registeredHotkeys.Clear();
             foreach (var (id, gesture) in previous)
@@ -483,7 +568,7 @@ public partial class MainWindow : Window
             }
             return false;
         }
-        return true;
+        return error is null;
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -1569,6 +1654,8 @@ public partial class MainWindow : Window
         foreach (int id in _registeredHotkeys.Keys) UnregisterHotKey(_hotkeyHandle, id);
         _hotkeySource?.RemoveHook(HotkeyWndProc);
         _settingsWindow?.Close();
+        _agentOverlay?.Close();
+        _debugOverlay?.Close();
         _clipboardMonitor.Dispose();
         _statusMonitor.Dispose();
         _weatherMonitor.Dispose();

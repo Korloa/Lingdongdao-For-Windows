@@ -18,6 +18,8 @@ public sealed record CloudCallRecord(
         "success" => ShouldIntervene == true
             ? (string.IsNullOrWhiteSpace(Suggestion) ? "模型未提供可显示建议" : "建议提醒")
             : "模型决定不提醒",
+        "agent_action" => "Agent 选择鼠标动作",
+        "agent_finished" => ShouldIntervene == true ? "Agent 判断完成" : "Agent 判断未完成",
         "empty" => "模型回复为空",
         "error" => "调用失败",
         "legacy" => "旧版未保存内容",

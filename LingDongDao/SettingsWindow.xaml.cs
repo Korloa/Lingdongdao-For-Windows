@@ -12,6 +12,7 @@ public partial class SettingsWindow : Window
     private readonly Action<AppSettings> _preview;
     private readonly Action _cancelPreview;
     private readonly PerceptionService _perception;
+    private readonly WeatherMonitor _weather;
     private readonly DispatcherTimer _perceptionTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private AppSettings _working;
     private bool _ready;
@@ -20,12 +21,18 @@ public partial class SettingsWindow : Window
 
     internal SettingsWindow(AppSettings current, Func<AppSettings, string?> apply,
         Action<AppSettings> preview, Action cancelPreview, PerceptionService perception)
+        : this(current, apply, preview, cancelPreview, perception, new WeatherMonitor(() => current)) { }
+
+    internal SettingsWindow(AppSettings current, Func<AppSettings, string?> apply,
+        Action<AppSettings> preview, Action cancelPreview, PerceptionService perception,
+        WeatherMonitor weather)
     {
         InitializeComponent();
         _apply = apply;
         _preview = preview;
         _cancelPreview = cancelPreview;
         _perception = perception;
+        _weather = weather;
         _working = current.Clone();
         DataContext = _working;
         SetHotkeyValues();
@@ -33,7 +40,8 @@ public partial class SettingsWindow : Window
         SetModeSelection();
         SetPerceptionValues();
         _perceptionTimer.Tick += (_, _) => RefreshPerceptionStatus();
-        Loaded += (_, _) => { _ready = true; _perceptionTimer.Start(); RefreshPerceptionStatus(); };
+        Loaded += (_, _) => { _ready = true; SelectPage("ModePage");
+            _perceptionTimer.Start(); RefreshPerceptionStatus(); };
     }
 
     private void SetPerceptionValues()
@@ -43,9 +51,13 @@ public partial class SettingsWindow : Window
         PerceptionPausedCheck.IsChecked = options.Paused;
         CloudUploadCheck.IsChecked = options.CloudEnabled && options.UploadConsent;
         GuiDetectorCheck.IsChecked = options.GuiDetectorEnabled;
+        DebugOverlayCheck.IsChecked = options.DebugOverlayEnabled;
         ResourceModeChoice.SelectedIndex = (int)options.Mode;
         PerceptionSampleSlider.SetCurrentValue(SettingSlider.ValueProperty, options.SampleSeconds);
         PerceptionThresholdSlider.SetCurrentValue(SettingSlider.ValueProperty, options.EscalationThreshold);
+        AgentMaxActionsSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)options.AgentMaxActions);
+        CloudDailyBudgetSlider.SetCurrentValue(SettingSlider.ValueProperty, options.DailyCloudBudgetUsd);
+        AgentGoalBox.Text = _working.AgentGoal;
     }
 
     private void RefreshPerceptionStatus()
@@ -62,15 +74,25 @@ public partial class SettingsWindow : Window
         var (mb, cpu) = _perception.ResourceUsage();
         PerceptionResourceText.Text = $"进程合计 {mb + _perception.WorkerMb:0} MB（主进程 {mb:0} MB）· CPU {cpu:0.0}% · 截图缓存 {_perception.FrameCount} 张 / {_perception.FrameBytes / 1048576.0:0.0} MB" +
             $"\n云端调用 {_perception.CloudCallsToday} 次 · OCR: {_perception.OcrStatus} · GUI: {_perception.GuiStatus}";
+        AgentStatusText.Text = $"Agent：{_perception.AgentStatus} · 已执行 {_perception.AgentActions} 步 · 云端判断 {_perception.AgentCalls} 次" +
+            $"\n今日预估费用 ${_perception.EstimatedCloudSpendToday:0.00} / ${_working.Perception.DailyCloudBudgetUsd:0.00}";
         PerceptionLogBox.Text = string.Join(Environment.NewLine, _perception.RecentLogs()
             .TakeLast(35).Select(item => $"{item.Time:HH:mm:ss} [{item.Module}/{item.Level}] {item.Event} {item.Summary}"));
+        WeatherCurrentText.Text = _weather.CurrentStatus;
+        WeatherForecastText.Text = "雷雨预报：" + _weather.StatusText;
+    }
+
+    private void RefreshWeather_Click(object sender, RoutedEventArgs e)
+    {
+        _weather.RefreshSettings();
+        WeatherCurrentText.Text = "正在更新天气…";
     }
 
     private void CloudUpload_Checked(object sender, RoutedEventArgs e)
     {
         if (!_ready || _working.Perception.UploadConsent) return;
         MessageBoxResult answer = System.Windows.MessageBox.Show(this,
-            "启用后，本地评分达到阈值或你主动按分析快捷键时，当前窗口截图、OCR 文字和操作摘要可能发往你配置的云端接口，并产生 API 费用。是否明确授权截图上传？",
+            "启用后，本地评分达到阈值、你主动分析或启动 Agent 时，当前窗口截图、OCR 文字和操作摘要可能发往云端并产生费用。是否明确授权截图上传？",
             "授权云端截图上传", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer == MessageBoxResult.Yes) _working.Perception.UploadConsent = true;
         else CloudUploadCheck.IsChecked = false;
@@ -79,6 +101,12 @@ public partial class SettingsWindow : Window
     private void ClearFrames_Click(object sender, RoutedEventArgs e)
     {
         _perception.ClearFrames();
+        RefreshPerceptionStatus();
+    }
+
+    private void StopAgent_Click(object sender, RoutedEventArgs e)
+    {
+        _perception.StopAgent();
         RefreshPerceptionStatus();
     }
 
@@ -118,7 +146,7 @@ public partial class SettingsWindow : Window
     }
 
     internal void NavigateToPerception() => Dispatcher.BeginInvoke(
-        new Action(() => PerceptionPanel.BringIntoView()));
+        new Action(() => SelectPage("PerceptionPage")));
 
     private void SetAppearanceValues()
     {
@@ -163,6 +191,8 @@ public partial class SettingsWindow : Window
         StyleHotkeyBox.Text = _working.ImageStyleHotkey;
         CompressHotkeyBox.Text = _working.ImageCompressHotkey;
         ManualAnalysisHotkeyBox.Text = _working.ManualAnalysisHotkey;
+        AgentStartHotkeyBox.Text = _working.AgentStartHotkey;
+        AgentStopHotkeyBox.Text = _working.AgentStopHotkey;
     }
 
     internal void SyncStartup(bool enabled)
@@ -188,7 +218,8 @@ public partial class SettingsWindow : Window
         if (Keyboard.FocusedElement is not System.Windows.Controls.TextBox box ||
             (box != PanelHotkeyBox && box != FormatHotkeyBox &&
              box != StyleHotkeyBox && box != CompressHotkeyBox &&
-             box != ManualAnalysisHotkeyBox)) return false;
+             box != ManualAnalysisHotkeyBox && box != AgentStartHotkeyBox &&
+             box != AgentStopHotkeyBox)) return false;
         if (!GlobalHotkey.TryFormatNative(packed & 0xFFFF, packed >> 16, out string value)) return false;
         box.Text = value;
         ErrorText.Text = string.Empty;
@@ -259,9 +290,12 @@ public partial class SettingsWindow : Window
         _working.Perception.CloudEnabled = CloudUploadCheck.IsChecked == true;
         _working.Perception.UploadConsent = _working.Perception.CloudEnabled && _working.Perception.UploadConsent;
         _working.Perception.GuiDetectorEnabled = GuiDetectorCheck.IsChecked == true;
+        _working.Perception.DebugOverlayEnabled = DebugOverlayCheck.IsChecked == true;
         _working.Perception.Mode = (ResourceMode)Math.Max(0, ResourceModeChoice.SelectedIndex);
         _working.Perception.SampleSeconds = PerceptionSampleSlider.Value;
         _working.Perception.EscalationThreshold = PerceptionThresholdSlider.Value;
+        _working.Perception.AgentMaxActions = (int)AgentMaxActionsSlider.Value;
+        _working.Perception.DailyCloudBudgetUsd = CloudDailyBudgetSlider.Value;
         if (_working.Perception.CloudEnabled && !_working.Perception.UploadConsent)
         { ErrorText.Text = "请先明确授权云端截图上传。"; return; }
         _working.WeatherLookaheadHours = (int)WeatherHoursSlider.Value;
@@ -270,6 +304,9 @@ public partial class SettingsWindow : Window
         _working.ImageStyleHotkey = StyleHotkeyBox.Text;
         _working.ImageCompressHotkey = CompressHotkeyBox.Text;
         _working.ManualAnalysisHotkey = ManualAnalysisHotkeyBox.Text;
+        _working.AgentStartHotkey = AgentStartHotkeyBox.Text;
+        _working.AgentStopHotkey = AgentStopHotkeyBox.Text;
+        _working.AgentGoal = AgentGoalBox.Text;
         string? error = _apply(_working.Clone());
         if (error is null)
         {
@@ -283,14 +320,40 @@ public partial class SettingsWindow : Window
 
     private void Navigate_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not System.Windows.Controls.Button { Tag: string anchor }) return;
-        if (FindName(anchor) is FrameworkElement section) section.BringIntoView();
+        if (sender is System.Windows.Controls.Button { Tag: string page }) SelectPage(page);
     }
+
+    private void SelectPage(string page)
+    {
+        (StackPanel View, System.Windows.Controls.Button Nav)[] pages =
+        [
+            (ModePage, ModeNav), (ShapePage, ShapeNav), (ImagePage, ImageNav),
+            (AlertsPage, AlertsNav), (PerceptionPage, PerceptionNav), (StartupPage, StartupNav)
+        ];
+        foreach (var (view, nav) in pages)
+        {
+            bool selected = view.Name == page;
+            view.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+            nav.Background = selected ? new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(39, 64, 79)) :
+                System.Windows.Media.Brushes.Transparent;
+            nav.Foreground = selected ? new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(220, 246, 252)) :
+                new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(169, 186, 196));
+            if (selected) PageTitleText.Text = nav.Content.ToString();
+        }
+        SettingsScroll.ScrollToTop();
+    }
+
+    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    { if (e.ChangedButton == MouseButton.Left) DragMove(); }
+    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
     protected override void OnClosed(EventArgs e)
     {
         _perceptionTimer.Stop();
-        if (!_saved) _cancelPreview();
+        if (!_saved) _cancelPreview?.Invoke();
         base.OnClosed(e);
     }
 }

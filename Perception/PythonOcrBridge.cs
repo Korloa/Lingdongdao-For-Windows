@@ -43,10 +43,7 @@ public sealed class PythonOcrBridge : IOcrEngine, IDisposable
         }
     }
 
-    private static string PythonPath => Environment.GetEnvironmentVariable("LINGDONGDAO_PYTHON") ??
-        (File.Exists(Path.Combine(AppContext.BaseDirectory, ".venv", "Scripts", "python.exe"))
-            ? Path.Combine(AppContext.BaseDirectory, ".venv", "Scripts", "python.exe")
-            : "python");
+    private static string PythonPath => PythonRuntime.PythonPath;
 
     private static string WorkerPath => Path.Combine(AppContext.BaseDirectory,
         "perception_py", "ocr_worker.py");

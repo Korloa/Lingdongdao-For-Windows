@@ -35,6 +35,10 @@ internal sealed class AppSettings
     public string ImageStyleHotkey { get; set; } = "Ctrl+1";
     public string ImageCompressHotkey { get; set; } = "Ctrl+2";
     public string ManualAnalysisHotkey { get; set; } = "Ctrl+Alt+J";
+    public string AgentStartHotkey { get; set; } = "Ctrl+Alt+Shift+L";
+    public string AgentStopHotkey { get; set; } = "Ctrl+Alt+Shift+X";
+    [JsonIgnore]
+    public string AgentGoal { get; set; } = "";
     public bool StartWithWindows { get; set; }
 
     public bool ChargingEnabled { get; set; } = true;
@@ -116,6 +120,10 @@ internal sealed class AppSettings
         ImageStyleHotkey = GlobalHotkey.CanonicalOrDefault(ImageStyleHotkey, "Ctrl+1");
         ImageCompressHotkey = GlobalHotkey.CanonicalOrDefault(ImageCompressHotkey, "Ctrl+2");
         ManualAnalysisHotkey = GlobalHotkey.CanonicalOrDefault(ManualAnalysisHotkey, "Ctrl+Alt+J");
+        AgentStartHotkey = GlobalHotkey.CanonicalOrDefault(AgentStartHotkey, "Ctrl+Alt+Shift+L");
+        AgentStopHotkey = GlobalHotkey.CanonicalOrDefault(AgentStopHotkey, "Ctrl+Alt+Shift+X");
+        AgentGoal = (AgentGoal ?? "").Trim();
+        if (AgentGoal.Length > 300) AgentGoal = AgentGoal[..300];
     }
 }
 

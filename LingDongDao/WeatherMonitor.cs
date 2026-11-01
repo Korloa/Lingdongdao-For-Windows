@@ -7,6 +7,7 @@ internal sealed class WeatherMonitor : IDisposable
 {
     private const string ForecastUrl =
         "https://api.open-meteo.com/v1/forecast?latitude=30.805&longitude=103.881" +
+        "&current=temperature_2m,weather_code,is_day" +
         "&hourly=weather_code&timezone=Asia%2FShanghai&forecast_hours=";
 
     private readonly Func<AppSettings> _settings;
@@ -19,6 +20,7 @@ internal sealed class WeatherMonitor : IDisposable
 
     public event Action<IslandNotice>? Notice;
     public string StatusText { get; private set; } = "尚未查询";
+    public string CurrentStatus { get; private set; } = "尚未查询";
 
     public WeatherMonitor(Func<AppSettings> settings)
     {
@@ -45,6 +47,7 @@ internal sealed class WeatherMonitor : IDisposable
         if (!settings.WeatherEnabled)
         {
             StatusText = "已关闭";
+            CurrentStatus = "天气查询已关闭";
             return;
         }
 
@@ -54,6 +57,7 @@ internal sealed class WeatherMonitor : IDisposable
             // Include one extra hour so an event near the end of the range is available.
             string json = await _http.GetStringAsync(ForecastUrl + (settings.WeatherLookaheadHours + 1));
             if (_disposed) return;
+            CurrentStatus = CurrentWeather.Format(json);
             settings = _settings();
             if (!settings.WeatherEnabled)
             {
@@ -84,7 +88,11 @@ internal sealed class WeatherMonitor : IDisposable
                                            FormatException or System.Text.Json.JsonException or KeyNotFoundException or
                                            InvalidOperationException)
         {
-            if (!_disposed) StatusText = $"查询失败：{exception.Message}";
+            if (!_disposed)
+            {
+                StatusText = $"查询失败：{exception.Message}";
+                CurrentStatus = "当前天气查询失败";
+            }
         }
         finally
         {

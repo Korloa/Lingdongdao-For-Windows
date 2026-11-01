@@ -292,6 +292,57 @@ var passwordGui = packaged with { GuiElements = [new GuiElement("secret", "Edit"
 Check(PrivacyFilter.Build(passwordGui, firstError, frames, memory, options)?.BeforeJpeg is null,
     "8f previous screenshot omitted when password field exists");
 
+var agentFrame = new AgentLoopFrame(terminal, cloudPackage!.ScreenshotBounds,
+    cloudPackage.CurrentJpeg, cloudPackage, packaged);
+var clickAction = new AgentToolDecision("call-1", AgentToolKind.Click, 120, 140,
+    "测试点击", false, "", "{}");
+Check(AgentMouseTool.IsAllowed(agentFrame, clickAction, terminal, out _) &&
+    !AgentMouseTool.IsAllowed(agentFrame, clickAction with { X = -100 }, terminal, out _) &&
+    !AgentMouseTool.IsAllowed(agentFrame, clickAction,
+        terminal with { Handle = terminal.Handle + 1 }, out _),
+    "8g mouse tool rejects coordinates outside target and stale foreground windows");
+var passwordAgentFrame = agentFrame with { Package = cloudPackage with { Gui =
+    [new GuiElement("[password]", "Edit", new PixelRect(110, 130, 40, 30),
+        true, true, "uia", null)] } };
+Check(!AgentMouseTool.IsAllowed(passwordAgentFrame,
+    clickAction with { Kind = AgentToolKind.RightClick }, terminal, out _),
+    "8g1 right click cannot target a password control");
+Type mouseInputType = typeof(AgentMouseTool).GetNestedType("Input",
+    BindingFlags.NonPublic)!;
+Check(System.Runtime.InteropServices.Marshal.SizeOf(mouseInputType) ==
+    (IntPtr.Size == 8 ? 40 : 28), "8g2 SendInput structure matches Windows layout");
+var agentEnvironment = new FakeAgentEnvironment(agentFrame, finishAfterActions: 1);
+AgentLoopOutcome agentOutcome = await new AgentLoopEngine().RunAsync(agentEnvironment,
+    4, null, CancellationToken.None);
+Check(agentOutcome.Success && agentOutcome.Actions == 1 &&
+    agentOutcome.CloudCalls == 2 && agentEnvironment.Captures == 2,
+    "8h agent executes one tool, returns a new screenshot, then verifies success");
+AgentLoopOutcome limitedOutcome = await new AgentLoopEngine().RunAsync(
+    new FakeAgentEnvironment(agentFrame, finishAfterActions: 99), 2, null,
+    CancellationToken.None);
+Check(!limitedOutcome.Success && limitedOutcome.Actions == 2 &&
+    limitedOutcome.CloudCalls == 3 && limitedOutcome.Status.Contains("上限"),
+    "8i agent stops at the operation limit without an infinite loop");
+using (var disabledAgent = new PerceptionService(() => new PerceptionOptions()))
+    Check(!disabledAgent.TryStartAgent("执行一个测试任务", out _),
+        "8i1 agent cannot start without cloud screenshot consent");
+var agentHandler = new MockAgentToolHandler();
+using (var agentClient = new ConfigurableCloudAgent(agentHandler,
+           "https://mock.invalid/v1/chat/completions", "mock-vision", "test-only"))
+{
+    var conversation = new AgentConversation();
+    AgentToolDecision firstTool = await agentClient.NextAgentToolAsync(conversation,
+        agentFrame, "点击测试按钮", [], CancellationToken.None);
+    var feedback = new AgentActionFeedback(firstTool, true, "已点击；等待截图验证");
+    conversation.AddToolResult(firstTool, feedback);
+    AgentToolDecision secondTool = await agentClient.NextAgentToolAsync(conversation,
+        agentFrame, "点击测试按钮", [feedback], CancellationToken.None);
+    Check(firstTool.Kind == AgentToolKind.Click && firstTool.X == 120 &&
+        secondTool.Kind == AgentToolKind.Finish && secondTool.Success &&
+        agentHandler.SawToolDefinition && agentHandler.SawSecondScreenshotAndToolResult,
+        "8j cloud tool protocol sends action result plus new screenshot before finish");
+}
+
 try { throw new HttpRequestException("mock cloud unavailable"); }
 catch (HttpRequestException)
 {
@@ -313,6 +364,16 @@ if (args.Contains("--deepseek-smoke"))
         "11 real DeepSeek multimodal request returns structured JSON");
     Console.WriteLine($"DEEPSEEK_SMOKE model={deepSeek.Model} " +
         $"intervene={realDecision!.ShouldIntervene} suggestion_length={realDecision.Suggestion.Length}");
+}
+
+if (args.Contains("--agent-tool-smoke"))
+{
+    using var toolClient = new ConfigurableCloudAgent();
+    AgentToolDecision tool = await toolClient.NextAgentToolAsync(new AgentConversation(),
+        agentFrame, "这是合成测试截图。不要点击，调用 finish 表示测试完成。", [], CancellationToken.None);
+    Check(!string.IsNullOrWhiteSpace(tool.CallId) &&
+        Enum.IsDefined(tool.Kind), "11b real DeepSeek vision tool call parses safely");
+    Console.WriteLine($"AGENT_TOOL_SMOKE kind={tool.Kind} label_length={tool.Label.Length}");
 }
 
 if (args.Contains("--settings-smoke"))
@@ -338,9 +399,26 @@ if (args.Contains("--settings-smoke"))
             var status = (System.Windows.Controls.TextBlock)panel.FindName("CloudCredentialStatusText")!;
             Check(panel.FindName("DeepSeekKeyBox") is System.Windows.Controls.PasswordBox &&
                 panel.FindName("PerceptionLogBox") is System.Windows.Controls.TextBox &&
+                panel.FindName("DebugOverlayCheck") is System.Windows.Controls.CheckBox &&
+                panel.FindName("WeatherCurrentText") is System.Windows.Controls.TextBlock &&
                 panel.FindName("ManualAnalysisHotkeyBox") is System.Windows.Controls.TextBox &&
+                panel.FindName("AgentGoalBox") is System.Windows.Controls.TextBox &&
+                panel.FindName("AgentStartHotkeyBox") is System.Windows.Controls.TextBox &&
                 status.Text.Contains("deepseek-flash"),
                 "12 WPF settings loads DeepSeek key controls and cloud status");
+            panelType.GetMethod("SelectPage", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(panel, ["PerceptionPage"]);
+            var perceptionPage = (System.Windows.FrameworkElement)panel.FindName("PerceptionPage")!;
+            var modePage = (System.Windows.FrameworkElement)panel.FindName("ModePage")!;
+            Check(perceptionPage.Visibility == System.Windows.Visibility.Visible &&
+                modePage.Visibility == System.Windows.Visibility.Collapsed &&
+                ((System.Windows.Controls.TextBlock)panel.FindName("PageTitleText")!).Text == "桌面感知",
+                "12b sidebar switches separate settings pages");
+            Type weatherType = assembly.GetType("LingDongDao.CurrentWeather", true)!;
+            string currentWeather = (string)weatherType.GetMethod("Format")!.Invoke(null,
+                ["{\"current\":{\"time\":\"2026-11-01T20:00\",\"temperature_2m\":15.7,\"weather_code\":3,\"is_day\":0}}"] )!;
+            Check(currentWeather.Contains("15.7°C") && currentWeather.Contains("阴") &&
+                currentWeather.Contains("20:00"), "12c current weather shows temperature, condition and update time");
             Type historyType = assembly.GetType("LingDongDao.CloudHistoryWindow", true)!;
             var historyPanel = (System.Windows.Window)Activator.CreateInstance(historyType,
                 BindingFlags.Instance | BindingFlags.NonPublic, null, [service], null)!;
@@ -349,6 +427,49 @@ if (args.Contains("--settings-smoke"))
                 historyPanel.FindName("RawResponseText") is System.Windows.Controls.TextBox,
                 "13 WPF call history loads screenshots and complete response controls");
             historyPanel.Close();
+            Type overlayType = assembly.GetType("LingDongDao.AgentActionOverlay", true)!;
+            var overlay = (System.Windows.Window)Activator.CreateInstance(overlayType,
+                nonPublic: true)!;
+            overlayType.GetMethod("ShowAction")!.Invoke(overlay,
+                [new AgentActionVisual(true, AgentToolKind.RightClick, 300, 220, "测试坐标")]);
+            var coordinate = (System.Windows.Controls.TextBlock)overlayType
+                .GetField("_coordinateText", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(overlay)!;
+            nint handle = new System.Windows.Interop.WindowInteropHelper(overlay).Handle;
+            nint exStyle = (nint)overlayType.GetMethod("GetWindowLongPtr",
+                BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [handle, -20])!;
+            Check(overlay.IsVisible && !overlay.ShowActivated &&
+                coordinate.Text.Contains("X 300") && coordinate.Text.Contains("Y 220") &&
+                (exStyle.ToInt64() & 0x20) != 0,
+                "14 click marker shows action and physical coordinates without activation");
+            overlay.Close();
+            Type debugType = assembly.GetType("LingDongDao.PerceptionDebugOverlay", true)!;
+            var debug = (System.Windows.Window)Activator.CreateInstance(debugType, nonPublic: true)!;
+            debugType.GetMethod("ShowObservation")!.Invoke(debug, [click]);
+            var canvas = (System.Windows.Controls.Canvas)debugType.GetField("_canvas",
+                BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(debug)!;
+            bool excluded = (bool)debugType.GetProperty("CaptureExcluded")!.GetValue(debug)!;
+            Check(debug.IsVisible && canvas.Children.Count >= 2 && excluded,
+                "15 OCR and GUI debug bounds render in a capture-excluded overlay");
+            debug.Close();
+            if (args.Contains("--settings-snapshot"))
+            {
+                panel.Show();
+                panelType.GetMethod("SelectPage", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(panel, ["PerceptionPage"]);
+                panel.UpdateLayout();
+                var render = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                    (int)panel.ActualWidth, (int)panel.ActualHeight, 96, 96,
+                    System.Windows.Media.PixelFormats.Pbgra32);
+                render.Render(panel);
+                var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(render));
+                string snapshot = Path.Combine(Path.GetTempPath(), "lingdongdao-settings-preview.png");
+                using var output = File.Create(snapshot);
+                encoder.Save(output);
+                Console.WriteLine("SETTINGS_SNAPSHOT " + snapshot);
+                panel.Close();
+            }
         }
         catch (Exception exception) { uiFailure = exception; }
     });
@@ -373,6 +494,7 @@ if (args.Contains("--live-smoke"))
 if (args.Contains("--live-service") || args.Contains("--live-service-enhanced"))
 {
     bool enhanced = args.Contains("--live-service-enhanced");
+    bool debug = args.Contains("--live-debug");
     Exception? failure = null;
     var thread = new Thread(() =>
     {
@@ -380,8 +502,16 @@ if (args.Contains("--live-service") || args.Contains("--live-service-enhanced"))
         {
             var liveOptions = new PerceptionOptions { Enabled = true, CloudEnabled = false,
                 Mode = enhanced ? ResourceMode.Enhanced : ResourceMode.Standard,
-                GuiDetectorEnabled = enhanced, SampleSeconds = 2 };
+                GuiDetectorEnabled = enhanced, DebugOverlayEnabled = debug, SampleSeconds = 2 };
             using var service = new PerceptionService(() => liveOptions);
+            int debugFrames = 0, debugOcr = 0, debugGui = 0;
+            service.DebugObservation += observation =>
+            {
+                if (observation is null) return;
+                debugFrames++;
+                debugOcr = Math.Max(debugOcr, observation.Ocr.Count);
+                debugGui = Math.Max(debugGui, observation.GuiElements.Count);
+            };
             service.Logged += entry => Console.WriteLine($"SERVICE {entry.Module}/{entry.Event} {entry.Summary}");
             service.Refresh();
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(12) };
@@ -394,6 +524,9 @@ if (args.Contains("--live-service") || args.Contains("--live-service-enhanced"))
                                   $"process_mb={mb:0.0} workers_mb={service.WorkerMb:0.0} " +
                                   $"total_mb={mb + service.WorkerMb:0.0} cpu_percent={cpu:0.0} " +
                                   $"ocr={service.OcrStatus} gui={service.GuiStatus}");
+                if (debug)
+                    Check(debugFrames > 0 && debugOcr > 0 && debugGui > 0,
+                        $"LIVE_DEBUG fused OCR={debugOcr} GUI={debugGui} frames={debugFrames}");
                 Dispatcher.ExitAllFrames();
             };
             timer.Start();
@@ -426,6 +559,55 @@ sealed class MockApiHandler : HttpMessageHandler
                 .StartsWith("data:image/jpeg;base64,", StringComparison.Ordinal));
         SawContext = content[0].GetProperty("text").GetString()!.Contains("terminal_error");
         const string reply = "{\"choices\":[{\"message\":{\"content\":\"{\\\"should_intervene\\\":true,\\\"reason\\\":\\\"mock\\\",\\\"suggestion\\\":\\\"Check the terminal error\\\",\\\"recommended_action\\\":null}\"}}]}";
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        { Content = new StringContent(reply, Encoding.UTF8, "application/json") };
+    }
+}
+
+sealed class FakeAgentEnvironment(AgentLoopFrame frame, int finishAfterActions) : IAgentLoopEnvironment
+{
+    public int Captures { get; private set; }
+    public Task<AgentLoopFrame> CaptureAsync(CancellationToken cancellationToken)
+    {
+        Captures++;
+        return Task.FromResult(frame);
+    }
+    public Task<AgentToolDecision> DecideAsync(AgentLoopFrame current,
+        IReadOnlyList<AgentActionFeedback> history, CancellationToken cancellationToken)
+    {
+        AgentToolDecision decision = history.Count >= finishAfterActions
+            ? new("finish", AgentToolKind.Finish, 0, 0, "完成", true, "截图已确认成功", "{}")
+            : new("click", AgentToolKind.Click, 120, 140, "测试点击", false, "", "{}");
+        return Task.FromResult(decision);
+    }
+    public Task<AgentActionFeedback> ExecuteAsync(AgentLoopFrame current,
+        AgentToolDecision decision, CancellationToken cancellationToken) =>
+        Task.FromResult(new AgentActionFeedback(decision, true, "mock click completed"));
+}
+
+sealed class MockAgentToolHandler : HttpMessageHandler
+{
+    private int _calls;
+    public bool SawToolDefinition { get; private set; }
+    public bool SawSecondScreenshotAndToolResult { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        using JsonDocument body = JsonDocument.Parse(await request.Content!
+            .ReadAsStringAsync(cancellationToken));
+        JsonElement root = body.RootElement;
+        SawToolDefinition = root.GetProperty("tool_choice").GetString() == "required" &&
+            root.GetProperty("tools").GetArrayLength() == 3;
+        JsonElement messages = root.GetProperty("messages");
+        if (++_calls == 2)
+            SawSecondScreenshotAndToolResult = messages.EnumerateArray().Any(item =>
+                item.GetProperty("role").GetString() == "tool") &&
+                messages[messages.GetArrayLength() - 1].GetProperty("content")[1]
+                    .GetProperty("type").GetString() == "image_url";
+        string tool = _calls == 1
+            ? "{\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"click\",\"arguments\":\"{\\\"x\\\":120,\\\"y\\\":140,\\\"label\\\":\\\"测试点击\\\"}\"}}"
+            : "{\"id\":\"call-2\",\"type\":\"function\",\"function\":{\"name\":\"finish\",\"arguments\":\"{\\\"success\\\":true,\\\"summary\\\":\\\"已完成\\\"}\"}}";
+        string reply = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[" + tool + "]}}]}";
         return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         { Content = new StringContent(reply, Encoding.UTF8, "application/json") };
     }
