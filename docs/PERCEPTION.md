@@ -43,7 +43,7 @@ dotnet run --project .\LingDongDao\LingDongDao.csproj -c Release
 
 若 Python 不在 `PATH`，运行 `.\scripts\setup-perception.ps1 -Python 'C:\path\python.exe'`。脚本使用官方 PyPI 创建项目内 `.venv`，安装 `perception_py/requirements.txt`。在设置面板“桌面感知”中开启感知、暂停/恢复、关闭云端上传、切换资源模式、调整采样间隔和阈值；面板展示当前软件、事件、评分、调用次数、进程合计内存、CPU 与黑底结构化日志。虚拟环境、模型、报告、截图均不加入 Git。
 
-设置侧栏每项是独立页面。“桌面感知”页在 OCR/GUI 状态下有“屏幕调试标注”开关，保存后会以穿透式、不会抢焦点且排除系统截图的窗口，在各识别框上标注 OCR 文字、GUI 类型和物理像素坐标。该开关默认关闭；关闭感知或切换敏感窗口时隐藏。GUI 视觉检测框只有在增强模式、启用检测器且模型可用时才会出现；UI Automation 控件仍可作为 GUI 标注。“提醒与天气”页显示 Open-Meteo 当前温度、WMO 天气描述、数据更新时间和未来雷雨查询状态，可手动刷新。[当前天气字段说明](https://open-meteo.com/en/docs)。
+设置侧栏每项是独立页面。“桌面感知”页在 OCR/GUI 状态下有“屏幕调试标注”开关，保存后会以穿透式、不会抢焦点且排除系统截图的窗口，在各识别框上标注 OCR 文字、GUI 类型和物理像素坐标。该开关默认关闭；关闭感知或切换敏感窗口时隐藏，密码控件及与其重叠的 OCR 文本也不绘制。GUI 视觉检测框只有在增强模式、启用检测器且模型可用时才会出现；UI Automation 控件仍可作为 GUI 标注。“提醒与天气”页显示 Open-Meteo 当前温度、WMO 天气描述、数据更新时间和未来雷雨查询状态，可手动刷新。[当前天气字段说明](https://open-meteo.com/en/docs)。
 
 默认 **低负载** 模式为窗口 API、UIA、按变化/兜底运行 OCR、规则评分；**标准** 模式更频繁运行 OCR；**增强** 模式增加按需 GUI 检测。GUI 检测须额外执行：
 

@@ -64,6 +64,8 @@ internal sealed class PerceptionDebugOverlay : Window
         foreach (OcrText item in observation.Ocr.Take(100))
         {
             if (!item.Bounds.Intersects(screen)) continue;
+            if (observation.GuiElements.Any(control => control.IsPassword &&
+                control.Bounds.Intersects(item.Bounds))) continue;
             string value = item.Text.Replace('\n', ' ').Replace('\r', ' ');
             Draw(item.Bounds, $"OCR {value}", Color.FromRgb(255, 190, 105), screen, scaleX, scaleY);
         }

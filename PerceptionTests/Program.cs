@@ -451,6 +451,12 @@ if (args.Contains("--settings-smoke"))
             bool excluded = (bool)debugType.GetProperty("CaptureExcluded")!.GetValue(debug)!;
             Check(debug.IsVisible && canvas.Children.Count >= 2 && excluded,
                 "15 OCR and GUI debug bounds render in a capture-excluded overlay");
+            var passwordRegion = new GuiElement("[password]", "Edit", buttonText.Bounds,
+                true, true, "uia", null);
+            debugType.GetMethod("ShowObservation")!.Invoke(debug, [click with
+                { GuiElements = [passwordRegion], Ocr = [buttonText] }]);
+            Check(canvas.Children.Count == 0,
+                "15b debug overlay hides OCR text inside password controls");
             debug.Close();
             if (args.Contains("--settings-snapshot"))
             {
