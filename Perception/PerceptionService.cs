@@ -17,6 +17,8 @@ public sealed partial class PerceptionService : IDisposable
     private readonly ConfigurableCloudAgent _cloud = new();
     private readonly CloudEscalationGate _gate = new(CloudEscalationGate.DefaultLedgerPath);
     private readonly CloudCallHistory _history = new();
+    private readonly AgentSkillStore _skills = new();
+    private readonly AgentWakeScheduler _wakes;
     private readonly SemaphoreSlim _analysisLock = new(1, 1);
     private readonly FrameRingBuffer _frames = new();
     private readonly StateMemory _memory = new();
@@ -63,7 +65,12 @@ public sealed partial class PerceptionService : IDisposable
     public IReadOnlyList<CloudCallRecord> CloudHistory() => _history.List(_gate.UsageRecords);
     public void ClearCloudHistory() { _history.Clear(); CloudHistoryChanged?.Invoke(); }
 
-    public PerceptionService(Func<PerceptionOptions> options) => _options = options;
+    public PerceptionService(Func<PerceptionOptions> options)
+    {
+        _options = options;
+        _wakes = new AgentWakeScheduler(OnAgentWake, error: exception =>
+            Log("warn", "agent", "wake_error", exception.GetType().Name));
+    }
 
     // Called on the WPF UI thread so the native hooks have a message pump.
     public void Refresh()
@@ -464,6 +471,7 @@ public sealed partial class PerceptionService : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _wakes.Dispose();
         Task? active = _loop;
         Task? agent = _agentTask;
         StopAgent();

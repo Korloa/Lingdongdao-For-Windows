@@ -13,12 +13,20 @@ public sealed partial class PerceptionService
     public event Action? AgentBeforeCapture;
     public event Action? AgentAfterCapture;
     public event Action<AgentLoopOutcome>? AgentCompleted;
+    public event Action<AgentActionVisual>? AgentClicked;
+    public event Action<AgentWakeJob>? AgentWakeStarted;
+    public event Action<string>? AgentWakeFailed;
+    public IReadOnlyList<AgentSkill> AgentSkills => _skills.List();
+    public IReadOnlyList<AgentWakeJob> PendingAgentWakes => _wakes.Pending;
+    public void ClearAgentSkills() => _skills.Clear();
+    public void ClearAgentWakes() => _wakes.Clear();
     public bool AgentRunning => _agentTask is { IsCompleted: false };
     public string AgentStatus => _agentStatus;
     public int AgentActions => _agentActions;
     public int AgentCalls => _agentCalls;
 
-    public bool TryStartAgent(string goal, out string message, bool quickMode = false)
+    public bool TryStartAgent(string goal, out string message, bool quickMode = false,
+        string? wakeContext = null)
     {
         goal = goal.Trim();
         if (_disposed) { message = "服务已关闭"; return false; }
@@ -41,14 +49,29 @@ public sealed partial class PerceptionService
         CancellationToken token = _agentStop.Token;
         _agentTask = Task.Run(() => RunAgentAsync(goal,
             quickMode ? options.QuickAgentMaxActions : options.AgentMaxActions,
-            quickMode, token));
+            quickMode, wakeContext, token));
         message = "已启动；可随时按“停止 Agent”快捷键中止";
         return true;
     }
 
     public void StopAgent() => _agentStop?.Cancel();
 
+    private void OnAgentWake(AgentWakeJob job)
+    {
+        if (AgentRunning)
+        {
+            try { _wakes.Schedule(job.Goal, job.Context, TimeSpan.FromSeconds(30)); }
+            catch (Exception exception) { AgentWakeFailed?.Invoke(exception.Message); }
+            return;
+        }
+        if (TryStartAgent(job.Goal, out string message, true,
+            $"定时器已于 {job.DueAt:yyyy-MM-dd HH:mm:ss zzz} 到期。{job.Context} 请观察新截图后继续，不要重复设置相同定时器。"))
+            AgentWakeStarted?.Invoke(job);
+        else { Log("warn", "agent", "wake_failed", message); AgentWakeFailed?.Invoke(message); }
+    }
+
     private async Task RunAgentAsync(string goal, int maxActions, bool quickMode,
+        string? wakeContext,
         CancellationToken cancellationToken)
     {
         AgentLoopOutcome outcome;
@@ -57,9 +80,22 @@ public sealed partial class PerceptionService
         {
             await _analysisLock.WaitAsync(cancellationToken);
             locked = true;
-            var environment = new LiveAgentEnvironment(this, goal, quickMode);
+            AgentSkill? skill = quickMode ? _skills.Find(goal) : null;
+            if (skill is not null) Log("info", "agent", "skill_hit",
+                $"已找到成功经验：{skill.SuccessCount} 次，{skill.Steps.Count} 步");
+            string? skillContext = skill is null ? null :
+                "过去完成同一任务的步骤（不含坐标或输入文字，仍需以当前截图校验）：" +
+                System.Text.Json.JsonSerializer.Serialize(skill.Steps);
+            var environment = new LiveAgentEnvironment(this, goal, quickMode,
+                string.Join("\n", new[] { wakeContext, skillContext }
+                    .Where(item => !string.IsNullOrWhiteSpace(item))));
             outcome = await new AgentLoopEngine().RunAsync(environment, maxActions,
-                ReportAgent, cancellationToken);
+                ReportAgent, cancellationToken, actions =>
+                {
+                    if (!quickMode) return;
+                    try { _skills.Remember(goal, actions); }
+                    catch (Exception exception) { Log("warn", "agent", "skill_save", exception.GetType().Name); }
+                });
         }
         catch (OperationCanceledException)
         { outcome = new(false, _agentActions, _agentCalls, "已停止", "用户停止或运行超过 5 分钟"); }
@@ -96,9 +132,10 @@ public sealed partial class PerceptionService
         private HashSet<nint> _browserWindowsBeforeLaunch = [];
         private bool _typedInMessageApp;
 
-        public LiveAgentEnvironment(PerceptionService service, string goal, bool quickMode)
+        public LiveAgentEnvironment(PerceptionService service, string goal, bool quickMode,
+            string? context)
         { _service = service; _goal = goal; _quickMode = quickMode;
-            _conversation = new AgentConversation(quickMode); }
+            _conversation = new AgentConversation(quickMode, context); }
 
         public async Task<AgentLoopFrame> CaptureAsync(CancellationToken cancellationToken)
         {
@@ -221,6 +258,29 @@ public sealed partial class PerceptionService
         public async Task<AgentActionFeedback> ExecuteAsync(AgentLoopFrame frame,
             AgentToolDecision decision, CancellationToken cancellationToken)
         {
+            if (_quickMode && decision.Kind == AgentToolKind.ScheduleWake)
+            {
+                string[] parts = (decision.Value ?? "").Split('|', 2);
+                try
+                {
+                    int seconds = int.Parse(parts[0]);
+                    AgentWakeJob job = _service._wakes.Schedule(_goal, parts[1],
+                        TimeSpan.FromSeconds(seconds));
+                    _service._agentActions++;
+                    var scheduled = new AgentActionFeedback(decision, true,
+                        $"已安排 {job.DueAt.ToLocalTime():MM-dd HH:mm:ss} 唤醒；期间不截图、不调用云端");
+                    _conversation.AddToolResult(decision, scheduled);
+                    return scheduled;
+                }
+                catch (Exception exception) when (exception is ArgumentException or
+                    InvalidOperationException or FormatException or IOException)
+                {
+                    var failed = new AgentActionFeedback(decision, false,
+                        "定时唤醒未设置：" + exception.Message);
+                    _conversation.AddToolResult(decision, failed);
+                    return failed;
+                }
+            }
             if (decision.Kind == AgentToolKind.OpenBrowser)
             {
                 using var beforeLaunch = new WindowsActivity();
@@ -240,7 +300,8 @@ public sealed partial class PerceptionService
                     executed ? "浏览器已启动；等待新窗口截图验证" :
                     !sameWindow ? "前台窗口已变化，未启动浏览器" : "浏览器未能启动");
                 _conversation.AddToolResult(decision, result);
-                if (executed) await Task.Delay(1000, cancellationToken);
+                if (executed) await Task.Delay(Math.Max(300,
+                    _service._options().AgentActionPauseMs), cancellationToken);
                 return result;
             }
             if (_quickMode && decision.Kind is AgentToolKind.OpenApp or AgentToolKind.ActivateWindow)
@@ -266,7 +327,8 @@ public sealed partial class PerceptionService
                             target.Bounds.X + Math.Min(100, target.Bounds.Width / 2),
                             target.Bounds.Y + Math.Min(24, target.Bounds.Height / 2),
                             decision.Label));
-                        await Task.Delay(680, cancellationToken);
+                        await Task.Delay(_service._options().AgentCursorMoveMs,
+                            cancellationToken);
                         executed = DesktopWindowTool.Activate(target);
                     }
                     else executed = DesktopAppTool.TryLaunch(decision.Value ?? "", out _);
@@ -276,7 +338,8 @@ public sealed partial class PerceptionService
                 if (executed) _service._agentActions++;
                 var result = new AgentActionFeedback(decision, executed, detail);
                 _conversation.AddToolResult(decision, result);
-                if (executed) await Task.Delay(900, cancellationToken);
+                if (executed) await Task.Delay(Math.Max(300,
+                    _service._options().AgentActionPauseMs), cancellationToken);
                 return result;
             }
             if (_quickMode && decision.Kind == AgentToolKind.Wait)
@@ -312,10 +375,10 @@ public sealed partial class PerceptionService
                     !AgentTaskPermissions.MaySendMessage(_goal) && _typedInMessageApp &&
                     decision.Kind == AgentToolKind.PressKeys &&
                     decision.Value is "ENTER" or "CTRL+ENTER";
-                bool executed = sameForeground && !password && !secret &&
-                    !unauthorizedSend &&
+                bool executed = sameForeground && !password && !secret && !unauthorizedSend &&
                     (decision.Kind == AgentToolKind.TypeText
-                        ? AgentKeyboardTool.TypeText(decision.Value ?? "")
+                        ? await AgentKeyboardTool.TypeTextAsync(decision.Value ?? "",
+                            _service._options().AgentTypingIntervalMs, cancellationToken)
                         : AgentKeyboardTool.PressKeys(decision.Value ?? ""));
                 if (executed) _service._agentActions++;
                 if (executed && AgentTaskPermissions.IsMessagingApp(frame.Window) &&
@@ -329,7 +392,8 @@ public sealed partial class PerceptionService
                     unauthorizedSend ? "任务没有明确要求发送消息，已拦截回车" :
                     secret ? "文本包含敏感凭据，未输入" : "Windows 未接受键盘动作");
                 _conversation.AddToolResult(decision, result);
-                if (executed) await Task.Delay(450, cancellationToken);
+                if (executed) await Task.Delay(_service._options().AgentActionPauseMs,
+                    cancellationToken);
                 return result;
             }
             if (_quickMode && AgentTaskPermissions.IsMessagingApp(frame.Window) &&
@@ -356,7 +420,9 @@ public sealed partial class PerceptionService
                 decision.X, decision.Y, decision.Label));
             try
             {
-                await Task.Delay(_quickMode ? 680 : 180, cancellationToken);
+                PerceptionOptions motion = _service._options();
+                await Task.Delay(_quickMode ? motion.AgentCursorMoveMs : 180,
+                    cancellationToken);
                 using var freshActivity = new WindowsActivity();
                 bool stillAllowed = _quickMode
                     ? AgentMouseTool.IsAllowedDesktop(frame, decision,
@@ -376,7 +442,8 @@ public sealed partial class PerceptionService
                             decision.Y, int.Parse(decision.Value!), _quickMode),
                         AgentToolKind.Drag => AgentMouseTool.ExecuteDrag(decision.X,
                             decision.Y, decision.TargetX, decision.TargetY, _quickMode,
-                            cancellationToken),
+                            cancellationToken, motion.AgentCursorMoveMs,
+                            motion.AgentCursorCurve),
                         _ => AgentMouseTool.Execute(
                             decision.Kind == AgentToolKind.Navigate
                                 ? decision with { Kind = AgentToolKind.Click } : decision,
@@ -390,8 +457,13 @@ public sealed partial class PerceptionService
                     WindowInfo? focused = beforeTyping.Foreground();
                     executed = focused?.Handle == frame.Window.Handle &&
                         focused.ProcessId == frame.Window.ProcessId &&
-                        AgentKeyboardTool.Navigate(decision.Value ?? "");
+                        await AgentKeyboardTool.NavigateAsync(decision.Value ?? "",
+                            motion.AgentTypingIntervalMs, cancellationToken);
                 }
+                if (clicked && decision.Kind is AgentToolKind.Click or AgentToolKind.RightClick or
+                    AgentToolKind.DoubleClick or AgentToolKind.Navigate)
+                    _service.AgentClicked?.Invoke(new AgentActionVisual(true, decision.Kind,
+                        decision.X, decision.Y, decision.Label));
                 if (executed) _service._agentActions++;
                 var result = new AgentActionFeedback(decision, executed,
                     executed ? (decision.Kind == AgentToolKind.Navigate
@@ -399,7 +471,8 @@ public sealed partial class PerceptionService
                         "鼠标动作已发出；结果待下一帧截图验证") :
                     !stillAllowed ? latestReason : "Windows 未接受鼠标或键盘动作");
                 _conversation.AddToolResult(decision, result);
-                await Task.Delay(decision.Kind == AgentToolKind.Navigate ? 1600 : 650,
+                await Task.Delay(decision.Kind == AgentToolKind.Navigate
+                    ? Math.Max(500, motion.AgentActionPauseMs) : motion.AgentActionPauseMs,
                     cancellationToken);
                 return result;
             }

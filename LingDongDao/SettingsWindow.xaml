@@ -489,6 +489,63 @@
                                    Foreground="#9CB0BB" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                         <local:SettingSlider x:Name="QuickAgentMaxActionsSlider" Label="全桌面 Agent 最多操作步数" Unit="步"
                                              Minimum="1" Maximum="20" Step="1" Decimals="0"/>
+                        <TextBlock Text="蓝色光标" Foreground="#8DD7EC" FontSize="12" Margin="0,14,0,7"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="135"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="光标颜色" VerticalAlignment="Center" Foreground="#DCE8ED"/>
+                            <TextBox x:Name="AgentCursorColorBox" Grid.Column="1" Height="30" MaxLength="7"
+                                     Background="#111C25" Foreground="#E8F1ED" BorderBrush="#3A5362"
+                                     Padding="8,4" ToolTip="输入 #RRGGBB，例如 #3BB8FF"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="135"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="光标形状" VerticalAlignment="Center" Foreground="#DCE8ED"/>
+                            <ComboBox x:Name="AgentCursorShapeChoice" Grid.Column="1" Height="30"
+                                      Background="#21313D" Foreground="#EDF4F7">
+                                <ComboBoxItem Content="经典箭头" Tag="arrow"/>
+                                <ComboBoxItem Content="细箭头" Tag="slim"/>
+                                <ComboBoxItem Content="菱角箭头" Tag="diamond"/>
+                            </ComboBox>
+                        </Grid>
+                        <local:SettingSlider x:Name="AgentCursorSizeSlider" Label="光标大小" Unit="px"
+                                              Minimum="20" Maximum="80" Step="1" Decimals="0"/>
+                        <local:SettingSlider x:Name="AgentGlowSlider" Label="发光半径" Unit="px"
+                                              Minimum="0" Maximum="50" Step="1" Decimals="0"/>
+                        <local:SettingSlider x:Name="AgentGlowOpacitySlider" Label="发光强度" Unit=""
+                                              Minimum="0" Maximum="1" Step="0.05" Decimals="2"/>
+                        <local:SettingSlider x:Name="AgentMoveSlider" Label="移动时长" Unit="ms"
+                                              Minimum="120" Maximum="1600" Step="20" Decimals="0"/>
+                        <Grid Margin="0,4,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="135"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="移动曲线" VerticalAlignment="Center" Foreground="#DCE8ED"/>
+                            <ComboBox x:Name="AgentCursorCurveChoice" Grid.Column="1" Height="30"
+                                      Background="#21313D" Foreground="#EDF4F7">
+                                <ComboBoxItem Content="平滑起止" Tag="smooth"/>
+                                <ComboBoxItem Content="匀速直线" Tag="linear"/>
+                                <ComboBoxItem Content="快速起步" Tag="easeOut"/>
+                                <ComboBoxItem Content="模拟弧线" Tag="human"/>
+                            </ComboBox>
+                        </Grid>
+                        <local:SettingSlider x:Name="AgentActionPauseSlider" Label="操作间隔" Unit="ms"
+                                              Minimum="0" Maximum="1500" Step="50" Decimals="0"/>
+                        <local:SettingSlider x:Name="AgentTypingSlider" Label="每字输入间隔" Unit="ms"
+                                              Minimum="0" Maximum="250" Step="5" Decimals="0"/>
+                        <local:SettingSlider x:Name="AgentSparkSlider" Label="点击火花数量" Unit="粒"
+                                              Minimum="0" Maximum="16" Step="1" Decimals="0"/>
+                        <TextBlock Text="任务经验与定时唤醒" Foreground="#8DD7EC" FontSize="12" Margin="0,14,0,7"/>
+                        <TextBlock x:Name="AgentSkillStatusText" Foreground="#9CB0BB" TextWrapping="Wrap" Margin="0,0,0,7"/>
+                        <TextBlock Text="最近成功经验" Foreground="#DCE8ED" Margin="0,4,0,5"/>
+                        <ListBox x:Name="AgentSkillList" Height="85" Background="#111C25" Foreground="#B6D5DE"
+                                 BorderBrush="#3A5362" FontSize="11"/>
+                        <TextBlock Text="待唤醒任务" Foreground="#DCE8ED" Margin="0,10,0,5"/>
+                        <ListBox x:Name="AgentWakeList" Height="70" Background="#111C25" Foreground="#B6D5DE"
+                                 BorderBrush="#3A5362" FontSize="11"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button Content="清空成功经验" Width="120" Style="{StaticResource SecondaryButton}"
+                                    Click="ClearAgentSkills_Click" Margin="0,0,8,0"/>
+                            <Button Content="取消所有定时唤醒" Width="145" Style="{StaticResource SecondaryButton}"
+                                    Click="ClearAgentWakes_Click"/>
+                        </StackPanel>
                         <TextBlock Text="固定窗口 Agent" Foreground="#8DD7EC" FontSize="12" Margin="0,4,0,7"/>
                         <TextBlock Text="下方旧模式只操作启动时的目标软件。写明任务目标并保存，切换到目标软件后按“启动 Agent”快捷键；可随时按“停止 Agent”快捷键。"
                                    Foreground="#9CB0BB" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,7"/>

@@ -117,6 +117,32 @@ public partial class MainWindow : Window
             if (!Dispatcher.HasShutdownStarted)
                 Dispatcher.Invoke(() => ShowAgentVisual(cue));
         };
+        _perception.AgentClicked += cue =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                Dispatcher.BeginInvoke(new Action(() => _ghostCursor?.ClickSpark()));
+        };
+        _perception.AgentWakeStarted += job =>
+        {
+            if (Dispatcher.HasShutdownStarted) return;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!GetCursorPos(out NativePoint point)) point = new NativePoint();
+                _ghostCursor ??= new AgentGhostCursorOverlay();
+                _ghostCursor.ApplyOptions(_settings.Perception);
+                _quickAgentActive = true;
+                _ghostCursor.Start(point.X, point.Y);
+                ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                    "定时任务已唤醒", job.Context), false, true);
+            }));
+        };
+        _perception.AgentWakeFailed += message =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                Dispatcher.BeginInvoke(new Action(() => ShowNoticeCore(
+                    new IslandNotice(NoticeKind.AgentSuggestion,
+                        "定时任务未启动", message), false, true)));
+        };
         _perception.AgentBeforeCapture += () =>
         {
             if (!Dispatcher.HasShutdownStarted)
@@ -142,6 +168,7 @@ public partial class MainWindow : Window
                         ? outcome.Status : outcome.Summary;
                     if (detail.Length > 66) detail = detail[..65] + "…";
                     ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                        outcome.Status == "等待定时唤醒" ? "Agent 已设定唤醒" :
                         outcome.Success ? "Agent 已完成" : "Agent 已停止", detail), false, true);
                     _closeTimer.Interval = TimeSpan.FromSeconds(Math.Max(8, CurrentVisualSettings.NoticeSeconds));
                     _closeTimer.Start();
@@ -315,6 +342,7 @@ public partial class MainWindow : Window
             if (previousWindow != IntPtr.Zero) SetForegroundWindow(previousWindow);
             if (!GetCursorPos(out NativePoint point)) point = new NativePoint();
             _ghostCursor ??= new AgentGhostCursorOverlay();
+            _ghostCursor.ApplyOptions(_settings.Perception);
             _quickAgentActive = true;
             bool started = _perception.TryStartAgent(goal, out string message, quickMode: true);
             if (started) _ghostCursor.Start(point.X, point.Y);
@@ -423,6 +451,7 @@ public partial class MainWindow : Window
     private void ApplyVisualSettings()
     {
         AppSettings visual = CurrentVisualSettings;
+        _ghostCursor?.ApplyOptions(visual.Perception);
         if (visual.DisplayMode != IslandDisplayMode.Automatic && _pickerOpen)
         {
             CancelFormatMovement();
@@ -1649,6 +1678,11 @@ public partial class MainWindow : Window
 
     private void SetIcon(NoticeKind kind)
     {
+        bool agent = kind == NoticeKind.AgentSuggestion;
+        AgentOrb.Visibility = agent ? Visibility.Visible : Visibility.Collapsed;
+        NoticeIcon.Visibility = agent ? Visibility.Collapsed : Visibility.Visible;
+        if (agent) StartAgentOrb();
+        else StopAgentOrb();
         MediaColor accent = kind switch
         {
             NoticeKind.Idle => MediaColor.FromRgb(128, 184, 255),
@@ -1679,6 +1713,44 @@ public partial class MainWindow : Window
             NoticeKind.ImageConverted => "M 4,4 H 20 V 20 H 4 Z M 7,16 L 11,12 L 14,15 L 17,10 L 20,15 V 20 H 4 Z",
             _ => "M 10,2 H 14 L 13,15 H 11 Z M 10,18 H 14 V 22 H 10 Z"
         });
+    }
+
+    private bool _orbAnimating;
+
+    private void StartAgentOrb()
+    {
+        if (_orbAnimating) return;
+        _orbAnimating = true;
+        var spin = new RotateTransform(0);
+        OrbCore.RenderTransformOrigin = new Point(0.5, 0.5);
+        OrbCore.RenderTransform = spin;
+        spin.BeginAnimation(RotateTransform.AngleProperty,
+            new DoubleAnimation(0, 360, TimeSpan.FromSeconds(3.8))
+            { RepeatBehavior = RepeatBehavior.Forever });
+        OrbGlow.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0.3, 0.75, TimeSpan.FromSeconds(1.4))
+            { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
+        var brush = (System.Windows.Media.LinearGradientBrush)OrbCore.Fill;
+        brush.GradientStops[0].BeginAnimation(GradientStop.ColorProperty,
+            new ColorAnimation(MediaColor.FromRgb(91, 238, 255),
+                MediaColor.FromRgb(150, 116, 255), TimeSpan.FromSeconds(2.1))
+            { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
+        brush.GradientStops[2].BeginAnimation(GradientStop.ColorProperty,
+            new ColorAnimation(MediaColor.FromRgb(170, 105, 255),
+                MediaColor.FromRgb(61, 221, 235), TimeSpan.FromSeconds(2.5))
+            { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
+    }
+
+    private void StopAgentOrb()
+    {
+        if (!_orbAnimating) return;
+        _orbAnimating = false;
+        ((RotateTransform)OrbCore.RenderTransform).BeginAnimation(
+            RotateTransform.AngleProperty, null);
+        OrbGlow.BeginAnimation(OpacityProperty, null);
+        var brush = (System.Windows.Media.LinearGradientBrush)OrbCore.Fill;
+        brush.GradientStops[0].BeginAnimation(GradientStop.ColorProperty, null);
+        brush.GradientStops[2].BeginAnimation(GradientStop.ColorProperty, null);
     }
 
     private void AnimateShadow(double to)

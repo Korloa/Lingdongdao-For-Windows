@@ -58,6 +58,21 @@ public partial class SettingsWindow : Window
         AgentMaxActionsSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)options.AgentMaxActions);
         QuickAgentMaxActionsSlider.SetCurrentValue(SettingSlider.ValueProperty,
             (double)options.QuickAgentMaxActions);
+        AgentCursorColorBox.Text = options.AgentCursorColor;
+        AgentCursorShapeChoice.SelectedIndex = options.AgentCursorShape switch
+            { "slim" => 1, "diamond" => 2, _ => 0 };
+        AgentCursorSizeSlider.SetCurrentValue(SettingSlider.ValueProperty, options.AgentCursorSize);
+        AgentGlowSlider.SetCurrentValue(SettingSlider.ValueProperty, options.AgentCursorGlowRadius);
+        AgentGlowOpacitySlider.SetCurrentValue(SettingSlider.ValueProperty, options.AgentCursorGlowOpacity);
+        AgentMoveSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)options.AgentCursorMoveMs);
+        AgentCursorCurveChoice.SelectedIndex = options.AgentCursorCurve switch
+            { "linear" => 1, "easeOut" => 2, "human" => 3, _ => 0 };
+        AgentActionPauseSlider.SetCurrentValue(SettingSlider.ValueProperty,
+            (double)options.AgentActionPauseMs);
+        AgentTypingSlider.SetCurrentValue(SettingSlider.ValueProperty,
+            (double)options.AgentTypingIntervalMs);
+        AgentSparkSlider.SetCurrentValue(SettingSlider.ValueProperty,
+            (double)options.AgentClickSparkCount);
         CloudDailyBudgetSlider.SetCurrentValue(SettingSlider.ValueProperty, options.DailyCloudBudgetUsd);
         AgentGoalBox.Text = _working.AgentGoal;
     }
@@ -78,6 +93,14 @@ public partial class SettingsWindow : Window
             $"\n云端调用 {_perception.CloudCallsToday} 次 · OCR: {_perception.OcrStatus} · GUI: {_perception.GuiStatus}";
         AgentStatusText.Text = $"Agent：{_perception.AgentStatus} · 已执行 {_perception.AgentActions} 步 · 云端判断 {_perception.AgentCalls} 次" +
             $"\n今日预估费用 ${_perception.EstimatedCloudSpendToday:0.00} / ${_working.Perception.DailyCloudBudgetUsd:0.00}";
+        var wakes = _perception.PendingAgentWakes;
+        var skills = _perception.AgentSkills;
+        AgentSkillStatusText.Text = $"成功经验 {skills.Count} 条 · 待唤醒 {wakes.Count} 条" +
+            (wakes.Count > 0 ? $" · 最近 {wakes[0].DueAt.ToLocalTime():MM-dd HH:mm:ss}" : "");
+        AgentSkillList.ItemsSource = skills.Take(8).Select(item =>
+            $"{item.Goal}  ·  成功 {item.SuccessCount} 次  ·  {item.Steps.Count} 步").ToArray();
+        AgentWakeList.ItemsSource = wakes.Select(item =>
+            $"{item.DueAt.ToLocalTime():MM-dd HH:mm}  ·  {item.Goal}  ·  {item.Context}").ToArray();
         PerceptionLogBox.Text = string.Join(Environment.NewLine, _perception.RecentLogs()
             .TakeLast(35).Select(item => $"{item.Time:HH:mm:ss} [{item.Module}/{item.Level}] {item.Event} {item.Summary}"));
         WeatherCurrentText.Text = _weather.CurrentStatus;
@@ -109,6 +132,18 @@ public partial class SettingsWindow : Window
     private void StopAgent_Click(object sender, RoutedEventArgs e)
     {
         _perception.StopAgent();
+        RefreshPerceptionStatus();
+    }
+
+    private void ClearAgentSkills_Click(object sender, RoutedEventArgs e)
+    {
+        _perception.ClearAgentSkills();
+        RefreshPerceptionStatus();
+    }
+
+    private void ClearAgentWakes_Click(object sender, RoutedEventArgs e)
+    {
+        _perception.ClearAgentWakes();
         RefreshPerceptionStatus();
     }
 
@@ -300,6 +335,21 @@ public partial class SettingsWindow : Window
         _working.Perception.EscalationThreshold = PerceptionThresholdSlider.Value;
         _working.Perception.AgentMaxActions = (int)AgentMaxActionsSlider.Value;
         _working.Perception.QuickAgentMaxActions = (int)QuickAgentMaxActionsSlider.Value;
+        string color = AgentCursorColorBox.Text.Trim();
+        if (color.Length != 7 || color[0] != '#' || !color[1..].All(Uri.IsHexDigit))
+        { ErrorText.Text = "光标颜色请输入 #RRGGBB。"; return; }
+        _working.Perception.AgentCursorColor = color;
+        _working.Perception.AgentCursorShape =
+            (AgentCursorShapeChoice.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "arrow";
+        _working.Perception.AgentCursorSize = AgentCursorSizeSlider.Value;
+        _working.Perception.AgentCursorGlowRadius = AgentGlowSlider.Value;
+        _working.Perception.AgentCursorGlowOpacity = AgentGlowOpacitySlider.Value;
+        _working.Perception.AgentCursorMoveMs = (int)AgentMoveSlider.Value;
+        _working.Perception.AgentCursorCurve =
+            (AgentCursorCurveChoice.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "smooth";
+        _working.Perception.AgentActionPauseMs = (int)AgentActionPauseSlider.Value;
+        _working.Perception.AgentTypingIntervalMs = (int)AgentTypingSlider.Value;
+        _working.Perception.AgentClickSparkCount = (int)AgentSparkSlider.Value;
         _working.Perception.DailyCloudBudgetUsd = CloudDailyBudgetSlider.Value;
         if (_working.Perception.CloudEnabled && !_working.Perception.UploadConsent)
         { ErrorText.Text = "请先明确授权云端截图上传。"; return; }

@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using TextBox = System.Windows.Controls.TextBox;
 using Brushes = System.Windows.Media.Brushes;
 using Color = System.Windows.Media.Color;
@@ -18,7 +19,7 @@ internal sealed class AgentCommandWindow : Window
         Title = "召唤 Agent";
         Width = 520;
         Height = 176;
-        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        WindowStartupLocation = WindowStartupLocation.Manual;
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
         Background = Brushes.Transparent;
@@ -32,6 +33,14 @@ internal sealed class AgentCommandWindow : Window
             Background = new SolidColorBrush(Color.FromRgb(16, 27, 34)),
             Padding = new Thickness(22)
         };
+        var scale = new ScaleTransform(0.02, 0.86);
+        var slide = new TranslateTransform(0, 18);
+        var transform = new TransformGroup();
+        transform.Children.Add(scale);
+        transform.Children.Add(slide);
+        outer.RenderTransformOrigin = new System.Windows.Point(0.5, 1);
+        outer.RenderTransform = transform;
+        outer.Opacity = 0;
         var layout = new StackPanel();
         layout.Children.Add(new TextBlock
         {
@@ -56,7 +65,27 @@ internal sealed class AgentCommandWindow : Window
         });
         outer.Child = layout;
         Content = outer;
-        Loaded += (_, _) => _command.Focus();
+        SourceInitialized += (_, _) =>
+        {
+            var area = System.Windows.Forms.Screen.FromPoint(
+                System.Windows.Forms.Cursor.Position).WorkingArea;
+            DpiScale dpi = VisualTreeHelper.GetDpi(this);
+            Left = (area.Left + area.Width / 2.0) / dpi.DpiScaleX - Width / 2;
+            Top = area.Bottom / dpi.DpiScaleY - Height - 16;
+        };
+        Loaded += (_, _) =>
+        {
+            var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty,
+                new DoubleAnimation(1, TimeSpan.FromMilliseconds(330)) { EasingFunction = easing });
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty,
+                new DoubleAnimation(1, TimeSpan.FromMilliseconds(330)) { EasingFunction = easing });
+            slide.BeginAnimation(TranslateTransform.YProperty,
+                new DoubleAnimation(0, TimeSpan.FromMilliseconds(330)) { EasingFunction = easing });
+            outer.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(1, TimeSpan.FromMilliseconds(220)));
+            _command.Focus();
+        };
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape) { Close(); e.Handled = true; }

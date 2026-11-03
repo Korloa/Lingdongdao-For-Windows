@@ -75,6 +75,16 @@ public sealed class PerceptionOptions
     public int CooldownSeconds { get; set; } = 300;
     public int AgentMaxActions { get; set; } = 8;
     public int QuickAgentMaxActions { get; set; } = 12;
+    public double AgentCursorSize { get; set; } = 40;
+    public double AgentCursorGlowRadius { get; set; } = 22;
+    public double AgentCursorGlowOpacity { get; set; } = 0.95;
+    public string AgentCursorColor { get; set; } = "#3BB8FF";
+    public string AgentCursorShape { get; set; } = "arrow";
+    public int AgentCursorMoveMs { get; set; } = 620;
+    public string AgentCursorCurve { get; set; } = "smooth";
+    public int AgentActionPauseMs { get; set; } = 180;
+    public int AgentTypingIntervalMs { get; set; } = 25;
+    public int AgentClickSparkCount { get; set; } = 8;
     public string[] SensitiveProcesses { get; set; } = ["KeePass", "Bitwarden", "1Password", "WindowsSecurityHealthUI"];
     public string[] SensitiveTitleWords { get; set; } = ["密码管理", "password vault", "银行账户"];
 
@@ -98,6 +108,21 @@ public sealed class PerceptionOptions
         CooldownSeconds = Math.Clamp(CooldownSeconds, 0, 86400);
         AgentMaxActions = Math.Clamp(AgentMaxActions, 1, 20);
         QuickAgentMaxActions = Math.Clamp(QuickAgentMaxActions, 1, 20);
+        AgentCursorSize = Math.Clamp(AgentCursorSize, 20, 80);
+        AgentCursorGlowRadius = Math.Clamp(AgentCursorGlowRadius, 0, 50);
+        AgentCursorGlowOpacity = Math.Clamp(AgentCursorGlowOpacity, 0, 1);
+        AgentCursorMoveMs = Math.Clamp(AgentCursorMoveMs, 120, 1600);
+        AgentCursorCurve = AgentCursorCurve is "linear" or "smooth" or "easeOut" or "human"
+            ? AgentCursorCurve : "smooth";
+        AgentCursorShape = AgentCursorShape is "arrow" or "slim" or "diamond"
+            ? AgentCursorShape : "arrow";
+        if (AgentCursorColor is null || AgentCursorColor.Length != 7 ||
+            AgentCursorColor[0] != '#' ||
+            !AgentCursorColor.AsSpan(1).ToString().All(Uri.IsHexDigit))
+            AgentCursorColor = "#3BB8FF";
+        AgentActionPauseMs = Math.Clamp(AgentActionPauseMs, 0, 1500);
+        AgentTypingIntervalMs = Math.Clamp(AgentTypingIntervalMs, 0, 250);
+        AgentClickSparkCount = Math.Clamp(AgentClickSparkCount, 0, 16);
     }
 }
 

@@ -49,10 +49,31 @@ internal static class AgentKeyboardTool
     public static bool TypeText(string text) => text.Length is >= 1 and <= 1000 &&
         !text.Any(char.IsControl) && TypeUnicode(text);
 
+    public static async Task<bool> TypeTextAsync(string text, int intervalMs,
+        CancellationToken cancellationToken)
+    {
+        if (text.Length is < 1 or > 1000 || text.Any(char.IsControl)) return false;
+        foreach (char character in text)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TypeUnicode(character.ToString())) return false;
+            if (intervalMs > 0) await Task.Delay(intervalMs, cancellationToken);
+        }
+        return true;
+    }
+
     public static bool Navigate(string url)
     {
         if (!AgentBrowserTool.TryNormalizeUrl(url, out string normalized)) return false;
         return PressChord(Control, L) && TypeUnicode(normalized) && Press(Enter);
+    }
+
+    public static async Task<bool> NavigateAsync(string url, int intervalMs,
+        CancellationToken cancellationToken)
+    {
+        if (!AgentBrowserTool.TryNormalizeUrl(url, out string normalized)) return false;
+        return PressChord(Control, L) &&
+            await TypeTextAsync(normalized, intervalMs, cancellationToken) && Press(Enter);
     }
 
     private static bool PressChord(ushort modifier, ushort key)

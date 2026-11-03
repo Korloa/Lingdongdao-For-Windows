@@ -102,7 +102,8 @@ public static class AgentMouseTool
     }
 
     public static bool ExecuteDrag(int x, int y, int targetX, int targetY,
-        bool preserveUserCursor, CancellationToken cancellationToken)
+        bool preserveUserCursor, CancellationToken cancellationToken,
+        int durationMs = 324, string curve = "smooth")
     {
         NativePoint old = default;
         bool restore = preserveUserCursor && GetCursorPos(out old);
@@ -116,10 +117,28 @@ public static class AgentMouseTool
             for (int step = 1; step <= 18; step++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                int nextX = x + (targetX - x) * step / 18;
-                int nextY = y + (targetY - y) * step / 18;
-                if (!SetCursorPos(nextX, nextY)) return false;
-                Thread.Sleep(18);
+                double t = step / 18.0;
+                double progress = curve switch
+                {
+                    "linear" => t,
+                    "easeOut" => 1 - Math.Pow(1 - t, 3),
+                    _ => t * t * (3 - 2 * t)
+                };
+                double nextX = x + (targetX - x) * progress;
+                double nextY = y + (targetY - y) * progress;
+                if (curve == "human")
+                {
+                    double dx = targetX - x, dy = targetY - y;
+                    double length = Math.Sqrt(dx * dx + dy * dy);
+                    if (length > 1)
+                    {
+                        double arc = Math.Min(65, length * 0.08) * Math.Sin(Math.PI * progress);
+                        nextX -= dy / length * arc;
+                        nextY += dx / length * arc;
+                    }
+                }
+                if (!SetCursorPos((int)Math.Round(nextX), (int)Math.Round(nextY))) return false;
+                Thread.Sleep(Math.Max(1, durationMs / 18));
             }
             return true;
         }

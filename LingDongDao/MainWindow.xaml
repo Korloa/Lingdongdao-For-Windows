@@ -59,9 +59,34 @@
                     </Grid.ColumnDefinitions>
                     <Border x:Name="IconBadge" Width="44" Height="44" CornerRadius="22"
                             Background="#1939DDA1" VerticalAlignment="Center">
-                        <Path x:Name="NoticeIcon" Data="M 13,2 L 5,13 L 11,13 L 9,22 L 20,9 L 14,9 Z"
-                              Fill="#54F4B0" Stretch="Uniform" Width="23" Height="23"
-                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <Grid>
+                            <Path x:Name="NoticeIcon" Data="M 13,2 L 5,13 L 11,13 L 9,22 L 20,9 L 14,9 Z"
+                                  Fill="#54F4B0" Stretch="Uniform" Width="23" Height="23"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Grid x:Name="AgentOrb" Width="39" Height="39" Visibility="Collapsed"
+                                  IsHitTestVisible="False">
+                                <Ellipse x:Name="OrbGlow" Width="34" Height="34" Opacity="0.48">
+                                    <Ellipse.Fill>
+                                        <RadialGradientBrush>
+                                            <GradientStop Color="#662EEBFF" Offset="0"/>
+                                            <GradientStop Color="#114E87FF" Offset="1"/>
+                                        </RadialGradientBrush>
+                                    </Ellipse.Fill>
+                                </Ellipse>
+                                <Ellipse x:Name="OrbCore" Width="27" Height="27">
+                                    <Ellipse.Fill>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#5BEEFF" Offset="0"/>
+                                            <GradientStop Color="#3979FF" Offset="0.48"/>
+                                            <GradientStop Color="#AA69FF" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Ellipse.Fill>
+                                </Ellipse>
+                                <Ellipse Width="8" Height="8" Fill="#B8FFFFFF"
+                                         HorizontalAlignment="Left" VerticalAlignment="Top"
+                                         Margin="9,8,0,0"/>
+                            </Grid>
+                        </Grid>
                     </Border>
                     <Button x:Name="PreviewImageFrame" Width="44" Height="44"
                             VerticalAlignment="Center" Visibility="Collapsed" Focusable="False" Cursor="Hand"

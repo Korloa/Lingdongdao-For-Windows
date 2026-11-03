@@ -115,6 +115,8 @@ v0.9.0 新增测试覆盖 `open_browser` → `navigate` → 新截图 → `finis
 
 v0.9.1 将快捷 Agent 改为整桌面循环。离线测试覆盖负坐标显示器、跨窗口点击校验、全桌面敏感窗口遮挡、应用与窗口工具解析、禁止路径启动，以及 13 种工具定义；`--live-smoke` 在本机测得整桌面 JPEG 为 1536×864、约 0.05 MB。真实云端任务 `--live-desktop-agent` 使用 Win+E 从 Chrome 切到资源管理器并经新截图确认；`--live-text-agent` 从 Chrome 切到记事本、输入“灵动岛测试”并经新截图确认（5 步、6 次云端判断）。未实测 QQ、微信消息发送、UAC 窗口与多显示器实机交互。
 
+v0.10.0 增加光标造型、发光、移动曲线、操作与输入节奏的设置，以及点击粒子效果；召唤窗口按当前屏幕 DPI 定位到任务栏上方并从底部中央展开。Agent 成功结束后，`AgentSkillStore` 使用当前用户 DPAPI 保存任务目标和安全的动作摘要，不保存截图、点击坐标和输入文字。再次执行同一目标时把经验作为上下文交给模型；模型仍要检查当前截图，所以这不是未经验证的坐标脚本回放。`AgentWakeScheduler` 将最多 5 个定时唤醒加密保存，用单次计时器等待最近到期项，不持续截图或调用云端。云端可调用 `schedule_wake(seconds, context, label)`，限制 10 秒至 24 小时；到期后用当前截图和原任务重启全桌面 Agent。唤醒失败会提示原因，未授权、密钥缺失或预算不足时不会上传截图。设置面板可查看并清空经验和待唤醒任务。离线测试覆盖工具解析、循环休眠、加密存储、跨重启唤醒、WPF 光标火花及召唤框定位；真实 DeepSeek 合成图调用接受更新后的 14 种工具定义。尚未对真实 15 分钟视频任务进行全程等待实测。
+
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
 独立 WPF 界面烟测已验证新版 EXE 能启动，并能通过 Ctrl+Alt+D 打开感知设置面板；测试后已恢复原安装版进程。该界面进程本身曾观察到约 214 MB 工作集（当时感知关闭），因此启用增强模式后整款应用可能超过 500 MB；上面的 417～450 MB 是感知测试宿主与模型进程合计值，不代表完整灵动岛的内存上限。
@@ -128,6 +130,7 @@ v0.9.1 将快捷 Agent 改为整桌面循环。离线测试覆盖负坐标显示
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
 | `Perception/CloudCallHistory.cs`, `LingDongDao/CloudHistoryWindow.xaml` | 本机加密调用记录及截图、完整回复查看 |
 | `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `DesktopAppTool.cs`, `DesktopWindowTool.cs`, `DesktopWindowInventory.cs`, `PerceptionService.Agent.cs` | 全桌面 Agent 循环、输入工具、软件与窗口切换、受限网址输入和运行控制 |
+| `Perception/AgentSkillStore.cs`, `AgentWakeScheduler.cs` | 加密的成功步骤经验和单次计时唤醒 |
 | `LingDongDao/AgentActionOverlay.cs`, `AgentGhostCursorOverlay.cs`, `AgentCommandWindow.cs` | 点击坐标浮层、蓝色光标和快捷指令输入框 |
 | `LingDongDao/PerceptionDebugOverlay.cs` | OCR/GUI 识别框与坐标调试浮层，Windows 截图排除 |
 | `LingDongDao/CurrentWeather.cs` | 当前温度、WMO 天气代码及更新时间解析 |

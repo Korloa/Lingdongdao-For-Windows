@@ -2,7 +2,7 @@ namespace LingDongDao.Perception;
 
 public enum AgentToolKind
 { Click, RightClick, Finish, OpenBrowser, Navigate, DoubleClick, Scroll, TypeText, PressKeys, Wait, Drag,
-  OpenApp, ActivateWindow }
+  OpenApp, ActivateWindow, ScheduleWake }
 
 public sealed record AgentToolDecision(string CallId, AgentToolKind Kind, int X, int Y,
     string Label, bool Success, string Summary, string RawResponse, string? Value = null,
@@ -33,7 +33,8 @@ public interface IAgentLoopEnvironment
 public sealed class AgentLoopEngine
 {
     public async Task<AgentLoopOutcome> RunAsync(IAgentLoopEnvironment environment,
-        int maxActions, Action<string>? status, CancellationToken cancellationToken)
+        int maxActions, Action<string>? status, CancellationToken cancellationToken,
+        Action<IReadOnlyList<AgentActionFeedback>>? completed = null)
     {
         if (maxActions is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(maxActions));
         var history = new List<AgentActionFeedback>();
@@ -45,8 +46,11 @@ public sealed class AgentLoopEngine
             status?.Invoke($"正在让云端判断第 {round + 1} 轮");
             AgentToolDecision decision = await environment.DecideAsync(frame, history, cancellationToken);
             if (decision.Kind == AgentToolKind.Finish)
+            {
+                if (decision.Success) completed?.Invoke(history.ToArray());
                 return new AgentLoopOutcome(decision.Success, history.Count, round + 1,
                     decision.Success ? "任务完成" : "模型无法继续", decision.Summary);
+            }
             if (round == maxActions)
                 return new AgentLoopOutcome(false, history.Count, round + 1,
                     "达到操作步数上限", "最后一次截图已交给云端判断，但任务仍未完成");
@@ -59,6 +63,9 @@ public sealed class AgentLoopEngine
                 cancellationToken);
             history.Add(feedback);
             status?.Invoke($"第 {round + 1} 步结果：{feedback.Detail}");
+            if (decision.Kind == AgentToolKind.ScheduleWake && feedback.Executed)
+                return new AgentLoopOutcome(true, history.Count, round + 1,
+                    "等待定时唤醒", feedback.Detail);
             // The next iteration captures the result of this exact action and returns it to the model.
         }
         throw new InvalidOperationException("Unreachable agent loop state");

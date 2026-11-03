@@ -9,16 +9,19 @@ public sealed class AgentConversation
 {
     private readonly List<object> _messages;
     private readonly bool _quickMode;
+    private readonly string _context;
 
-    public AgentConversation(bool quickMode = false)
+    public AgentConversation(bool quickMode = false, string? context = null)
     {
         _quickMode = quickMode;
+        _context = context ?? "";
         string tools = quickMode
             ? "You operate the entire Windows desktop, including taskbar, Start menu, all monitors, and any app. " +
               "Use mouse, keyboard, scroll, drag, wait, and browser tools as needed. A window may change after each action. " +
               "Prefer open_app for installed programs and activate_window for an already visible window. " +
               "Use WIN, type_text, and ENTER for apps not found by open_app. " +
-              "Only send messages or submit forms when the user's task explicitly asks you to do so. "
+              "Only send messages or submit forms when the user's task explicitly asks you to do so. " +
+              "For a delay longer than 5 seconds, use schedule_wake once and end this run; the app will resume you at the due time with a fresh screenshot. "
             : "You operate one Windows application. Call only click, right_click, or finish. ";
         _messages = [new { role = "system", content =
             "You are a visible desktop agent carrying out the user's explicit task. " + tools +
@@ -42,7 +45,9 @@ public sealed class AgentConversation
         string windows = frame.VisibleWindows is null ? "" :
             "可见窗口：" + JsonSerializer.Serialize(frame.VisibleWindows.Take(25).Select(item => new
             { item.Handle, item.ProcessName, item.Title, item.Bounds })) + "\n";
-        string prompt = $"用户任务：{goal}\n当前窗口：{frame.Window.ProcessName} / {frame.Window.Title}\n" +
+        string prompt = $"用户任务：{goal}\n" +
+            (string.IsNullOrEmpty(_context) ? "" : $"已验证的本地经验或唤醒上下文：{_context}\n经验仅供参考，实际操作前仍需查看当前截图。\n") +
+            $"当前窗口：{frame.Window.ProcessName} / {frame.Window.Title}\n" +
             windows +
             $"截图对应的屏幕范围：x={frame.Bounds.X}, y={frame.Bounds.Y}, " +
             $"width={frame.Bounds.Width}, height={frame.Bounds.Height}。\n上一轮工具结果：{previous}\n" +
@@ -157,7 +162,14 @@ public sealed partial class ConfigurableCloudAgent
             description = "Bring an already visible desktop window to the foreground using its exact handle from the visible-window list.",
             parameters = new { type = "object", properties = new
             { handle = new { type = "integer" }, label = new { type = "string" } },
-              required = new[] { "handle", "label" }, additionalProperties = false } } }
+               required = new[] { "handle", "label" }, additionalProperties = false } } },
+        new { type = "function", function = new { name = "schedule_wake",
+            description = "Suspend this task and resume after 10 to 86400 seconds. Use for watching a video or other long waits; do not poll screenshots. The current run ends after scheduling.",
+            parameters = new { type = "object", properties = new
+            { seconds = new { type = "integer" },
+              context = new { type = "string", description = "What to inspect when the timer fires, max 400 chars. Never include secrets." },
+              label = new { type = "string" } },
+              required = new[] { "seconds", "context", "label" }, additionalProperties = false } } }
     ];
 
     public async Task<AgentToolDecision> NextAgentToolAsync(AgentConversation conversation,
@@ -209,6 +221,18 @@ public sealed partial class ConfigurableCloudAgent
             if (summary.Length > 400) summary = summary[..400];
             return new AgentToolDecision(id, AgentToolKind.Finish, 0, 0,
                 "完成", success, summary, raw);
+        }
+        if (name == "schedule_wake")
+        {
+            int seconds = input.GetProperty("seconds").GetInt32();
+            string context = (input.GetProperty("context").GetString() ?? "").Trim();
+            if (seconds is < 10 or > 86400 || context.Length is < 3 or > 400 ||
+                PrivacyFilter.ContainsSecret(context))
+                throw new InvalidDataException("Invalid wake request");
+            string wakeLabel = (input.GetProperty("label").GetString() ?? "定时唤醒").Trim();
+            if (wakeLabel.Length > 48) wakeLabel = wakeLabel[..48];
+            return new AgentToolDecision(id, AgentToolKind.ScheduleWake, 0, 0,
+                wakeLabel, false, "", raw, $"{seconds}|{context}");
         }
         if (name == "open_browser")
         {

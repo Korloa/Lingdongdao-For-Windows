@@ -512,6 +512,55 @@ AgentLoopOutcome limitedOutcome = await new AgentLoopEngine().RunAsync(
 Check(!limitedOutcome.Success && limitedOutcome.Actions == 2 &&
     limitedOutcome.CloudCalls == 3 && limitedOutcome.Status.Contains("上限"),
     "8i agent stops at the operation limit without an infinite loop");
+AgentToolDecision wakeDecision = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("schedule_wake", new { seconds = 900,
+        context = "视频结束后检查播放页并向用户汇报", label = "15 分钟后继续" }), true);
+Check(wakeDecision.Kind == AgentToolKind.ScheduleWake &&
+    wakeDecision.Value!.StartsWith("900|"), "8i2 long wait parses as a deferred wake tool");
+AgentLoopOutcome sleeping = await new AgentLoopEngine().RunAsync(
+    new FakeWakeEnvironment(agentFrame, wakeDecision), 4, null, CancellationToken.None);
+Check(sleeping.Success && sleeping.CloudCalls == 1 && sleeping.Actions == 1 &&
+    sleeping.Status == "等待定时唤醒", "8i3 deferred wake ends the current screenshot loop");
+string testStore = Path.Combine(Path.GetTempPath(), "ldd-skill-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var skills = new AgentSkillStore(testStore);
+    var typed = new AgentToolDecision("t", AgentToolKind.TypeText, 0, 0,
+        "回复秘密内容", false, "", "{}", "私人消息ABC");
+    var launched = new AgentToolDecision("a", AgentToolKind.OpenApp, 0, 0,
+        "打开记事本", false, "", "{}", "记事本");
+    skills.Remember("打开记事本并写测试文本", [
+        new AgentActionFeedback(launched, true, "ok"),
+        new AgentActionFeedback(typed, true, "ok")]);
+    AgentSkill? remembered = new AgentSkillStore(testStore).Find("打开记事本，并写测试文本");
+    Check(remembered is { SuccessCount: 1 } && remembered.Steps.Count == 2 &&
+        remembered.Steps[0].SafeValue == "记事本" &&
+        remembered.Steps[1].SafeValue is null &&
+        !File.ReadAllText(testStore, Encoding.Latin1).Contains("私人消息ABC"),
+        "8i4 encrypted skills reuse successful steps without typed content or coordinates");
+}
+finally { if (File.Exists(testStore)) File.Delete(testStore); }
+string testWake = Path.Combine(Path.GetTempPath(), "ldd-wake-" + Guid.NewGuid().ToString("N"));
+DateTimeOffset fakeNow = DateTimeOffset.UtcNow;
+var fired = new List<AgentWakeJob>();
+try
+{
+    using (var scheduler = new AgentWakeScheduler(fired.Add, testWake, () => fakeNow))
+    {
+        scheduler.Schedule("看完视频后汇报结果", "查看播放页", TimeSpan.FromMinutes(15));
+        Check(scheduler.Pending.Count == 1 && fired.Count == 0,
+            "8i5 scheduled task sleeps without repeated callbacks");
+    }
+    using (var scheduler = new AgentWakeScheduler(fired.Add, testWake, () => fakeNow))
+    {
+        fakeNow = fakeNow.AddMinutes(15);
+        scheduler.CheckDue();
+        Check(fired.Count == 1 && scheduler.Pending.Count == 0 &&
+            fired[0].Context == "查看播放页",
+            "8i6 wake survives app restart and fires once at due time");
+    }
+}
+finally { if (File.Exists(testWake)) File.Delete(testWake); }
 using (var disabledAgent = new PerceptionService(() => new PerceptionOptions()))
     Check(!disabledAgent.TryStartAgent("执行一个测试任务", out _),
         "8i1 agent cannot start without cloud screenshot consent");
@@ -676,6 +725,9 @@ if (args.Contains("--settings-smoke"))
                 panel.FindName("AgentStartHotkeyBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("AgentCommandHotkeyBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("QuickAgentMaxActionsSlider") is System.Windows.FrameworkElement &&
+                panel.FindName("AgentCursorSizeSlider") is System.Windows.FrameworkElement &&
+                panel.FindName("AgentCursorCurveChoice") is System.Windows.Controls.ComboBox &&
+                panel.FindName("AgentSkillStatusText") is System.Windows.Controls.TextBlock &&
                 status.Text.Contains("deepseek-flash"),
                 "12 WPF settings loads DeepSeek key controls and cloud status");
             panelType.GetMethod("SelectPage", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -720,17 +772,31 @@ if (args.Contains("--settings-smoke"))
             ghostType.GetMethod("Start")!.Invoke(ghost, [300, 220]);
             ghostType.GetMethod("MoveTo")!.Invoke(ghost,
                 [new AgentActionVisual(true, AgentToolKind.Click, 380, 250, "测试点击")]);
+            ghostType.GetMethod("ApplyOptions")!.Invoke(ghost,
+                [new PerceptionOptions { AgentCursorSize = 55, AgentClickSparkCount = 6 }]);
+            ghostType.GetMethod("ClickSpark")!.Invoke(ghost, null);
             nint ghostHandle = new System.Windows.Interop.WindowInteropHelper(ghost).Handle;
             nint ghostStyle = (nint)ghostType.GetMethod("GetWindowLongPtr",
                 BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [ghostHandle, -20])!;
             Check(ghost.IsVisible && !ghost.ShowActivated &&
-                (ghostStyle.ToInt64() & 0x20) != 0,
+                (ghostStyle.ToInt64() & 0x20) != 0 &&
+                ((System.Windows.Controls.Canvas)ghost.Content).Children.Count >= 8,
                 "14a blue agent cursor is visible and click-through");
             ghost.Close();
             Type promptType = assembly.GetType("LingDongDao.AgentCommandWindow", true)!;
             var prompt = (System.Windows.Window)Activator.CreateInstance(promptType, nonPublic: true)!;
             Check(prompt.Title == "召唤 Agent" && prompt.Content is System.Windows.Controls.Border,
                 "14b quick agent command window loads");
+            prompt.Show();
+            var taskbarArea = System.Windows.Forms.Screen.FromPoint(
+                System.Windows.Forms.Cursor.Position).WorkingArea;
+            System.Windows.DpiScale promptDpi = System.Windows.Media.VisualTreeHelper.GetDpi(prompt);
+            Check(prompt.Top > (taskbarArea.Top + taskbarArea.Height / 2.0) /
+                    promptDpi.DpiScaleY &&
+                Math.Abs(prompt.Left + prompt.Width / 2.0 -
+                    (taskbarArea.Left + taskbarArea.Width / 2.0) /
+                    promptDpi.DpiScaleX) < 20,
+                "14b1 command window opens above the taskbar center");
             prompt.Close();
             Type debugType = assembly.GetType("LingDongDao.PerceptionDebugOverlay", true)!;
             var debug = (System.Windows.Window)Activator.CreateInstance(debugType, nonPublic: true)!;
@@ -763,6 +829,20 @@ if (args.Contains("--settings-smoke"))
                 using var output = File.Create(snapshot);
                 encoder.Save(output);
                 Console.WriteLine("SETTINGS_SNAPSHOT " + snapshot);
+                ((System.Windows.Controls.ScrollViewer)panel.FindName("SettingsScroll")!)
+                    .ScrollToVerticalOffset(620);
+                panel.UpdateLayout();
+                var lower = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                    (int)panel.ActualWidth, (int)panel.ActualHeight, 96, 96,
+                    System.Windows.Media.PixelFormats.Pbgra32);
+                lower.Render(panel);
+                var lowerEncoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                lowerEncoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(lower));
+                string lowerSnapshot = Path.Combine(Path.GetTempPath(),
+                    "lingdongdao-settings-agent-preview.png");
+                using var lowerOutput = File.Create(lowerSnapshot);
+                lowerEncoder.Save(lowerOutput);
+                Console.WriteLine("SETTINGS_AGENT_SNAPSHOT " + lowerSnapshot);
                 panel.Close();
             }
         }
@@ -891,6 +971,19 @@ sealed class FakeAgentEnvironment(AgentLoopFrame frame, int finishAfterActions) 
         Task.FromResult(new AgentActionFeedback(decision, true, "mock click completed"));
 }
 
+sealed class FakeWakeEnvironment(AgentLoopFrame frame, AgentToolDecision decision)
+    : IAgentLoopEnvironment
+{
+    public Task<AgentLoopFrame> CaptureAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(frame);
+    public Task<AgentToolDecision> DecideAsync(AgentLoopFrame current,
+        IReadOnlyList<AgentActionFeedback> history, CancellationToken cancellationToken) =>
+        Task.FromResult(decision);
+    public Task<AgentActionFeedback> ExecuteAsync(AgentLoopFrame current,
+        AgentToolDecision action, CancellationToken cancellationToken) =>
+        Task.FromResult(new AgentActionFeedback(action, true, "已设置唤醒"));
+}
+
 sealed class MockAgentToolHandler : HttpMessageHandler
 {
     private int _calls;
@@ -931,9 +1024,9 @@ sealed class MockQuickAgentToolHandler : HttpMessageHandler
         using JsonDocument body = JsonDocument.Parse(await request.Content!
             .ReadAsStringAsync(cancellationToken));
         JsonElement root = body.RootElement;
-        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 13 &&
+        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 14 &&
             root.GetProperty("tools").EnumerateArray().Any(item =>
-                item.GetProperty("function").GetProperty("name").GetString() == "navigate");
+                item.GetProperty("function").GetProperty("name").GetString() == "schedule_wake");
         JsonElement messages = root.GetProperty("messages");
         int call = ++_calls;
         if (call == 3)
