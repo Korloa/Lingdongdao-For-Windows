@@ -35,6 +35,35 @@ public sealed class ScreenCapture
         }
         return frames;
     }
+
+    public CapturedFrame CaptureDesktop(WindowInfo? foreground, int quality = 68)
+    {
+        Screen[] screens = Screen.AllScreens;
+        if (screens.Length == 0) throw new InvalidOperationException("No desktop displays");
+        int left = screens.Min(screen => screen.Bounds.Left);
+        int top = screens.Min(screen => screen.Bounds.Top);
+        int right = screens.Max(screen => screen.Bounds.Right);
+        int bottom = screens.Max(screen => screen.Bounds.Bottom);
+        var bounds = new PixelRect(left, top, right - left, bottom - top);
+        using var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
+        using (Graphics graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.Black);
+            foreach (Screen screen in screens)
+            {
+                var rect = screen.Bounds;
+                graphics.CopyFromScreen(rect.Left, rect.Top, rect.Left - left, rect.Top - top,
+                    rect.Size, CopyPixelOperation.SourceCopy);
+            }
+        }
+        using var output = new MemoryStream();
+        using var parameters = new EncoderParameters(1);
+        parameters.Param[0] = new EncoderParameter(Encoder.Quality, Math.Clamp(quality, 35, 90));
+        bitmap.Save(output, JpegCodec, parameters);
+        return new CapturedFrame(Guid.NewGuid(), DateTimeOffset.UtcNow,
+            new DisplayInfo("virtual-desktop", bounds, screens.Length == 1),
+            foreground, output.ToArray(), bounds.Width, bounds.Height);
+    }
 }
 
 public sealed class FrameRingBuffer

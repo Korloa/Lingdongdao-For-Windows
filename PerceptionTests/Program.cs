@@ -42,6 +42,16 @@ static void Check(bool condition, string caseName)
     Console.WriteLine("PASS " + caseName);
 }
 
+static string ToolEnvelope(string name, object arguments) => JsonSerializer.Serialize(new
+{
+    choices = new[] { new { message = new
+    {
+        role = "assistant", content = (string?)null,
+        tool_calls = new[] { new { id = "generic-1", type = "function",
+            function = new { name, arguments = JsonSerializer.Serialize(arguments) } } }
+    } } }
+});
+
 static CapturedFrame Frame(DateTimeOffset time, WindowInfo window, string id = "test",
     Action<Graphics>? draw = null)
 {
@@ -79,6 +89,8 @@ var classifier = new RuleClassifier();
 var memory = new StateMemory();
 var options = new PerceptionOptions { Enabled = true, CloudEnabled = true,
     UploadConsent = true, EscalationThreshold = 0.8, CooldownSeconds = 0 };
+Check(options.QuickAgentMaxActions == 12 && options.AgentMaxActions == 8,
+    "0 independent action limits for full desktop and fixed-window agents");
 
 DesktopObservation browsing = Observation(Frame(now, browser));
 LocalAssessment normal = classifier.Classify(browsing, memory);
@@ -407,6 +419,82 @@ Check(AgentBrowserTool.TryNormalizeUrl("baidu.com", out string baiduUrl) &&
     "8g3 browser tool accepts public HTTP(S) URLs and blocks local or credential URLs");
 Check(PrivacyFilter.IsSensitive(terminal with { ProcessName = "LockApp" }, options),
     "8g3a lock screen cannot be uploaded to the cloud");
+var desktopFrame = agentFrame with { Bounds = new PixelRect(-800, 0, 1600, 600) };
+var otherMonitorClick = clickAction with { X = -200, Y = 120 };
+Check(AgentMouseTool.IsAllowedDesktop(desktopFrame, otherMonitorClick, terminal, out _) &&
+    !AgentMouseTool.IsAllowed(desktopFrame, otherMonitorClick, terminal, out _) &&
+    !AgentMouseTool.IsAllowedDesktop(desktopFrame, otherMonitorClick,
+        vscode, out _),
+    "8g3b full desktop agent can click another monitor but rejects stale foreground");
+AgentToolDecision parsedText = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("type_text", new { text = "回复：你好", label = "输入回复" }), true);
+AgentToolDecision parsedKeys = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("press_keys", new { keys = "WIN+E", label = "打开资源管理器" }), true);
+AgentToolDecision parsedDrag = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("drag", new { x = -200, y = 120, target_x = 250,
+        target_y = 320, label = "拖动文件" }), true);
+AgentToolDecision parsedScroll = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("scroll", new { x = 300, y = 200, delta = -240,
+        label = "向下滚动" }), true);
+AgentToolDecision parsedApp = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("open_app", new { name = "微信", label = "打开微信" }), true);
+AgentToolDecision parsedWindow = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("activate_window", new { handle = 12345, label = "切换窗口" }), true);
+Check(parsedText.Kind == AgentToolKind.TypeText && parsedText.Value == "回复：你好" &&
+    parsedKeys.Kind == AgentToolKind.PressKeys && parsedKeys.Value == "WIN+E" &&
+    parsedDrag.Kind == AgentToolKind.Drag && parsedDrag.TargetX == 250 &&
+    parsedDrag.TargetY == 320 && parsedScroll.Kind == AgentToolKind.Scroll &&
+    parsedScroll.Value == "-240" && parsedApp.Kind == AgentToolKind.OpenApp &&
+    parsedApp.Value == "微信" && parsedWindow.Kind == AgentToolKind.ActivateWindow &&
+    parsedWindow.Value == "12345",
+    "8g3c generic desktop keyboard, app, window, drag and scroll tools parse");
+Check(!DesktopAppTool.TryLaunch("..\\powershell.exe", out _),
+    "8g3c1 app launcher refuses arbitrary file paths");
+var chatWindow = terminal with { ProcessName = "WeChat" };
+var sendButton = new GuiElement("发送", "Button", new PixelRect(110, 130, 45, 28),
+    true, false, "uia", null);
+Check(AgentTaskPermissions.IsMessagingApp(chatWindow) &&
+    !AgentTaskPermissions.MaySendMessage("打开微信，查看未读消息") &&
+    AgentTaskPermissions.MaySendMessage("回复张三：你好") &&
+    AgentTaskPermissions.IsSendControl(agentFrame with
+    { Window = chatWindow, Package = cloudPackage with { Gui = [sendButton] } },
+        clickAction),
+    "8g3c2 chat send controls require an explicit messaging task");
+bool unsafeShortcutRejected = false, legacyToolRejected = false;
+try { ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("press_keys", new { keys = "CTRL+ALT+DELETE", label = "测试" }), true); }
+catch (InvalidDataException) { unsafeShortcutRejected = true; }
+try { ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("type_text", new { text = "你好", label = "测试" })); }
+catch (InvalidDataException) { legacyToolRejected = true; }
+Check(unsafeShortcutRejected && legacyToolRejected,
+    "8g3d unsupported shortcuts and generic tools in legacy mode are rejected");
+var trimmedConversation = new AgentConversation(quickMode: true);
+AgentToolDecision syntheticClick = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("click", new { x = 120, y = 140, label = "测试" }), true);
+var syntheticFeedback = new AgentActionFeedback(syntheticClick, true, "已点击");
+for (int index = 0; index < 5; index++)
+{
+    trimmedConversation.AddScreenshot("测试完整桌面", agentFrame, [syntheticFeedback]);
+    trimmedConversation.AddToolResult(syntheticClick, syntheticFeedback);
+}
+trimmedConversation.AddScreenshot("测试完整桌面", agentFrame, [syntheticFeedback]);
+Check(trimmedConversation.Messages.Count == 8,
+    "8g3d1 cloud conversation retains recent screenshots without unbounded growth");
+var desktopFrames = new FrameRingBuffer();
+desktopFrames.Add(current, 30, 8);
+var maskedWindow = terminal with { Handle = 99, ProcessId = 999,
+    ProcessName = "KeePass", Bounds = new PixelRect(100, 100, 160, 110) };
+var maskedOcr = new OcrText("private area", new PixelRect(130, 130, 70, 20),
+    0.9, now, null);
+DesktopObservation desktopObservation = Observation(current, [maskedOcr]);
+CloudEventPackage? desktopPackage = PrivacyFilter.BuildDesktop(desktopObservation,
+    firstError, desktopFrames, memory, options, [terminal, maskedWindow]);
+using (var maskedImage = new Bitmap(new MemoryStream(desktopPackage!.CurrentJpeg)))
+    Check(desktopPackage.ScreenshotBounds == new PixelRect(0, 0, 800, 600) &&
+        desktopPackage.Ocr.Count == 0 && maskedImage.GetPixel(150, 150).R < 20 &&
+        maskedImage.GetPixel(350, 350).R > 230,
+        "8g3e full desktop package masks sensitive background windows and OCR");
 Type keyboardInputType = typeof(AgentBrowserTool).Assembly
     .GetType("LingDongDao.Perception.AgentKeyboardTool", true)!
     .GetNestedType("Input", BindingFlags.NonPublic)!;
@@ -512,8 +600,14 @@ if (args.Contains("--quick-agent-tool-smoke"))
         "11c real DeepSeek vision accepts quick agent tools and returns finish");
 }
 
-if (args.Contains("--live-quick-agent"))
+if (args.Contains("--live-quick-agent") || args.Contains("--live-desktop-agent") ||
+    args.Contains("--live-text-agent"))
 {
+    if (args.Contains("--live-text-agent"))
+    {
+        using Process? notepad = Process.Start("notepad.exe");
+        await Task.Delay(1800);
+    }
     if (args.Contains("--force-explorer"))
     {
         using Process? openedExplorer = Process.Start(new ProcessStartInfo("explorer.exe",
@@ -537,14 +631,19 @@ if (args.Contains("--live-quick-agent"))
     {
         if (entry.Module == "agent") Console.WriteLine($"LIVE_AGENT {entry.Event}: {entry.Summary}");
     };
-    bool started = service.TryStartAgent("打开 Google 浏览器，进入 baidu.com 网页",
+    string liveGoal = args.Contains("--live-text-agent")
+        ? "在当前记事本的空白文档里输入“灵动岛测试”，不要保存文件，看到文字后结束"
+        : args.Contains("--live-desktop-agent")
+        ? "打开 Windows 资源管理器，并确认资源管理器窗口已显示"
+        : "打开 Google 浏览器，进入 baidu.com 网页";
+    bool started = service.TryStartAgent(liveGoal,
         out string startMessage, quickMode: true);
     Console.WriteLine("LIVE_AGENT_START " + startMessage);
     Check(started, "11d live quick agent starts with saved cloud consent");
     AgentLoopOutcome result = await completed.Task.WaitAsync(TimeSpan.FromMinutes(3));
     Console.WriteLine($"LIVE_AGENT_RESULT success={result.Success} actions={result.Actions} " +
                       $"calls={result.CloudCalls} status={result.Status} detail={result.Summary}");
-    Check(result.Success, "11e live quick agent completes browser navigation");
+    Check(result.Success, "11e live quick agent completes the requested desktop task");
 }
 
 if (args.Contains("--settings-smoke"))
@@ -576,6 +675,7 @@ if (args.Contains("--settings-smoke"))
                 panel.FindName("AgentGoalBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("AgentStartHotkeyBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("AgentCommandHotkeyBox") is System.Windows.Controls.TextBox &&
+                panel.FindName("QuickAgentMaxActionsSlider") is System.Windows.FrameworkElement &&
                 status.Text.Contains("deepseek-flash"),
                 "12 WPF settings loads DeepSeek key controls and cloud status");
             panelType.GetMethod("SelectPage", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -681,8 +781,19 @@ if (args.Contains("--live-smoke"))
     WindowInfo? foreground = liveWindow.Foreground();
     var watch = Stopwatch.StartNew();
     IReadOnlyList<CapturedFrame> live = capture.Capture(foreground);
+    CapturedFrame desktop = capture.CaptureDesktop(foreground);
+    var screens = System.Windows.Forms.Screen.AllScreens;
+    Check(desktop.Display.Bounds.X == screens.Min(item => item.Bounds.Left) &&
+        desktop.Display.Bounds.Y == screens.Min(item => item.Bounds.Top) &&
+        desktop.Display.Bounds.Width == screens.Max(item => item.Bounds.Right) -
+            screens.Min(item => item.Bounds.Left) &&
+        desktop.Display.Bounds.Height == screens.Max(item => item.Bounds.Bottom) -
+            screens.Min(item => item.Bounds.Top),
+        "16 full desktop screenshot spans all monitors in physical coordinates");
     ScreenChange liveChange = new ChangeDetector().Analyze(live[0], [], false);
-    Console.WriteLine($"LIVE displays={live.Count} capture_change_ms={watch.ElapsedMilliseconds} " +
+    Console.WriteLine($"LIVE displays={live.Count} desktop={desktop.Width}x{desktop.Height} " +
+                      $"desktop_jpeg_mb={desktop.Jpeg.Length / 1048576.0:0.00} " +
+                      $"capture_change_ms={watch.ElapsedMilliseconds} " +
                       $"foreground={foreground?.ProcessName} first_reason={string.Join(',', liveChange.Reasons)}");
 }
 
@@ -820,7 +931,7 @@ sealed class MockQuickAgentToolHandler : HttpMessageHandler
         using JsonDocument body = JsonDocument.Parse(await request.Content!
             .ReadAsStringAsync(cancellationToken));
         JsonElement root = body.RootElement;
-        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 5 &&
+        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 13 &&
             root.GetProperty("tools").EnumerateArray().Any(item =>
                 item.GetProperty("function").GetProperty("name").GetString() == "navigate");
         JsonElement messages = root.GetProperty("messages");

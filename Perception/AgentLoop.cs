@@ -1,12 +1,16 @@
 namespace LingDongDao.Perception;
 
-public enum AgentToolKind { Click, RightClick, Finish, OpenBrowser, Navigate }
+public enum AgentToolKind
+{ Click, RightClick, Finish, OpenBrowser, Navigate, DoubleClick, Scroll, TypeText, PressKeys, Wait, Drag,
+  OpenApp, ActivateWindow }
 
 public sealed record AgentToolDecision(string CallId, AgentToolKind Kind, int X, int Y,
-    string Label, bool Success, string Summary, string RawResponse, string? Value = null);
+    string Label, bool Success, string Summary, string RawResponse, string? Value = null,
+    int TargetX = 0, int TargetY = 0);
 
 public sealed record AgentLoopFrame(WindowInfo Window, PixelRect Bounds, byte[] Jpeg,
-    CloudEventPackage Package, DesktopObservation Observation);
+    CloudEventPackage Package, DesktopObservation Observation,
+    IReadOnlyList<WindowInfo>? VisibleWindows = null);
 
 public sealed record AgentActionVisual(bool Visible, AgentToolKind Kind, int X, int Y,
     string Label);
@@ -46,12 +50,15 @@ public sealed class AgentLoopEngine
             if (round == maxActions)
                 return new AgentLoopOutcome(false, history.Count, round + 1,
                     "达到操作步数上限", "最后一次截图已交给云端判断，但任务仍未完成");
-            status?.Invoke(decision.Kind == AgentToolKind.OpenBrowser
+            status?.Invoke(decision.Kind is AgentToolKind.OpenBrowser or AgentToolKind.OpenApp or
+                AgentToolKind.ActivateWindow or AgentToolKind.TypeText or
+                AgentToolKind.PressKeys or AgentToolKind.Wait
                 ? $"第 {round + 1} 步：{decision.Label}"
                 : $"第 {round + 1} 步：{decision.Label} ({decision.X}, {decision.Y})");
             AgentActionFeedback feedback = await environment.ExecuteAsync(frame, decision,
                 cancellationToken);
             history.Add(feedback);
+            status?.Invoke($"第 {round + 1} 步结果：{feedback.Detail}");
             // The next iteration captures the result of this exact action and returns it to the model.
         }
         throw new InvalidOperationException("Unreachable agent loop state");

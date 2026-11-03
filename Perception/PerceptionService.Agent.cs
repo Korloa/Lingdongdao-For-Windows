@@ -39,7 +39,9 @@ public sealed partial class PerceptionService
         _agentCalls = 0;
         ReportAgent("正在启动");
         CancellationToken token = _agentStop.Token;
-        _agentTask = Task.Run(() => RunAgentAsync(goal, options.AgentMaxActions, quickMode, token));
+        _agentTask = Task.Run(() => RunAgentAsync(goal,
+            quickMode ? options.QuickAgentMaxActions : options.AgentMaxActions,
+            quickMode, token));
         message = "已启动；可随时按“停止 Agent”快捷键中止";
         return true;
     }
@@ -92,6 +94,7 @@ public sealed partial class PerceptionService
         private int _round;
         private string? _expectedProcessName;
         private HashSet<nint> _browserWindowsBeforeLaunch = [];
+        private bool _typedInMessageApp;
 
         public LiveAgentEnvironment(PerceptionService service, string goal, bool quickMode)
         { _service = service; _goal = goal; _quickMode = quickMode;
@@ -122,35 +125,59 @@ public sealed partial class PerceptionService
             if (window is null || window.ProcessId == Environment.ProcessId)
                 throw new InvalidOperationException("请将目标软件保持在前台");
             if (_processId == 0) _processId = window.ProcessId;
-            else if (window.ProcessId != _processId)
+            else if (!_quickMode && window.ProcessId != _processId)
                 throw new InvalidOperationException("前台已切换到其他软件，Agent 已停止");
             PerceptionOptions options = _service._options();
             if (!options.CloudEnabled || !options.UploadConsent ||
                 PrivacyFilter.IsSensitive(window, options))
                 throw new InvalidOperationException("当前窗口未获上传授权或被隐私规则排除");
-            IReadOnlyList<CapturedFrame> captured = await Task.Run(() =>
-                _service._capture.Capture(window), cancellationToken);
+            IReadOnlyList<WindowInfo> windowsBefore = _quickMode
+                ? DesktopWindowInventory.VisibleWindows() : [window];
+            CapturedFrame? frame;
+            if (_quickMode)
+                frame = await Task.Run(() => _service._capture.CaptureDesktop(window),
+                    cancellationToken);
+            else
+            {
+                IReadOnlyList<CapturedFrame> captured = await Task.Run(() =>
+                    _service._capture.Capture(window), cancellationToken);
+                frame = captured.Where(item => item.Display.Bounds.Intersects(window.Bounds))
+                    .OrderByDescending(item => item.Display.Bounds.Intersect(window.Bounds).Width *
+                        (long)item.Display.Bounds.Intersect(window.Bounds).Height).FirstOrDefault();
+            }
+            IReadOnlyList<WindowInfo> windows = _quickMode
+                ? windowsBefore.Concat(DesktopWindowInventory.VisibleWindows())
+                    .GroupBy(item => item.Handle).Select(group => group.First()).ToArray()
+                : [window];
             _service.AgentAfterCapture?.Invoke();
-            CapturedFrame frame = captured.Where(item => item.Display.Bounds.Intersects(window.Bounds))
-                .OrderByDescending(item => item.Display.Bounds.Intersect(window.Bounds).Width *
-                    (long)item.Display.Bounds.Intersect(window.Bounds).Height).FirstOrDefault()
-                ?? throw new InvalidOperationException("无法截取目标窗口");
-            PixelRect bounds = frame.Display.Bounds.Intersect(window.Bounds);
+            if (frame is null) throw new InvalidOperationException("无法截取桌面");
+            PixelRect bounds = _quickMode ? frame.Display.Bounds :
+                frame.Display.Bounds.Intersect(window.Bounds);
             _service._frames.Add(frame, options.FrameRetentionSeconds, options.FrameMemoryLimitMb);
             IReadOnlyList<GuiElement> controls = await _service.ReadUiAsync(window, cancellationToken);
-            if (controls.Count == 0) throw new InvalidOperationException("控件隐私检查不可用");
+            if (controls.Count == 0 && !_quickMode)
+                throw new InvalidOperationException("控件隐私检查不可用");
             IReadOnlyList<OcrText> ocr = await _service._ocr.RecognizeAsync(
-                CropToJpeg(frame, bounds), bounds, frame.Time, cancellationToken);
+                _quickMode ? frame.Jpeg : CropToJpeg(frame, bounds), bounds, frame.Time,
+                cancellationToken);
             if (!_service._ocr.Available) throw new InvalidOperationException("OCR 隐私检查失败");
             var change = new ScreenChange(0, [], ["agent_step"], true);
             var observation = ObservationFusion.Fuse(frame, bounds, controls, ocr, [],
-                activity.MousePosition(), change, []);
+                activity.MousePosition(), change, controls.Count == 0 ? ["uia"] : []);
             var assessment = new LocalAssessment("agent", "agent_step", _goal,
                 1, 1, 1, "user_started_agent", $"agent:{_sessionId}:{_round++}");
-            CloudEventPackage package = PrivacyFilter.Build(observation, assessment,
-                _service._frames, _service._memory, options)
+            CloudEventPackage package = (_quickMode
+                ? PrivacyFilter.BuildDesktop(observation, assessment, _service._frames,
+                    _service._memory, options, windows)
+                : PrivacyFilter.Build(observation, assessment,
+                    _service._frames, _service._memory, options))
                 ?? throw new InvalidOperationException("当前截图未通过隐私检查，Agent 已停止");
-            return new AgentLoopFrame(window, bounds, package.CurrentJpeg, package, observation);
+            IReadOnlyList<WindowInfo> safeWindows = windows.Where(item =>
+                item.ProcessId != Environment.ProcessId &&
+                !PrivacyFilter.IsSensitive(item, options) &&
+                !PrivacyFilter.ContainsSecret(item.Title)).Take(30).ToArray();
+            return new AgentLoopFrame(window, bounds, package.CurrentJpeg, package,
+                observation, safeWindows);
         }
 
         public async Task<AgentToolDecision> DecideAsync(AgentLoopFrame frame,
@@ -216,8 +243,56 @@ public sealed partial class PerceptionService
                 if (executed) await Task.Delay(1000, cancellationToken);
                 return result;
             }
+            if (_quickMode && decision.Kind is AgentToolKind.OpenApp or AgentToolKind.ActivateWindow)
+            {
+                using var beforeSwitch = new WindowsActivity();
+                WindowInfo? foreground = beforeSwitch.Foreground();
+                bool sameWindow = foreground?.Handle == frame.Window.Handle &&
+                    foreground.ProcessId == frame.Window.ProcessId;
+                WindowInfo? target = decision.Kind == AgentToolKind.ActivateWindow &&
+                    long.TryParse(decision.Value, out long handle)
+                    ? frame.VisibleWindows?.FirstOrDefault(item => item.Handle == handle) : null;
+                bool executed = false;
+                string detail;
+                if (!sameWindow) detail = "桌面前台已变化，未切换软件";
+                else if (decision.Kind == AgentToolKind.ActivateWindow && target is null)
+                    detail = "窗口不在上一帧可见窗口清单中";
+                else
+                {
+                    if (target is not null)
+                    {
+                        _service.AgentVisual?.Invoke(new AgentActionVisual(true,
+                            AgentToolKind.ActivateWindow,
+                            target.Bounds.X + Math.Min(100, target.Bounds.Width / 2),
+                            target.Bounds.Y + Math.Min(24, target.Bounds.Height / 2),
+                            decision.Label));
+                        await Task.Delay(680, cancellationToken);
+                        executed = DesktopWindowTool.Activate(target);
+                    }
+                    else executed = DesktopAppTool.TryLaunch(decision.Value ?? "", out _);
+                    detail = executed ? "软件切换请求已发出；等待新截图验证" :
+                        "未能打开或激活目标软件";
+                }
+                if (executed) _service._agentActions++;
+                var result = new AgentActionFeedback(decision, executed, detail);
+                _conversation.AddToolResult(decision, result);
+                if (executed) await Task.Delay(900, cancellationToken);
+                return result;
+            }
+            if (_quickMode && decision.Kind == AgentToolKind.Wait)
+            {
+                int milliseconds = int.Parse(decision.Value!);
+                await Task.Delay(milliseconds, cancellationToken);
+                _service._agentActions++;
+                var result = new AgentActionFeedback(decision, true,
+                    $"已等待 {milliseconds} ms；下一帧截图将显示最新桌面");
+                _conversation.AddToolResult(decision, result);
+                return result;
+            }
             using var activity = new WindowsActivity();
-            bool browserWindow = frame.Window.ProcessName is "chrome" or "msedge";
+            bool browserWindow = frame.Window.ProcessName.Equals("chrome",
+                StringComparison.OrdinalIgnoreCase) ||
+                frame.Window.ProcessName.Equals("msedge", StringComparison.OrdinalIgnoreCase);
             if (decision.Kind == AgentToolKind.Navigate && (!_quickMode || !browserWindow))
             {
                 var blocked = new AgentActionFeedback(decision, false,
@@ -225,7 +300,53 @@ public sealed partial class PerceptionService
                 _conversation.AddToolResult(decision, blocked);
                 return blocked;
             }
-            if (!AgentMouseTool.IsAllowed(frame, decision, activity.Foreground(), out string reason))
+            if (_quickMode && decision.Kind is AgentToolKind.TypeText or AgentToolKind.PressKeys)
+            {
+                bool sameForeground = activity.Foreground() is { } current &&
+                    current.Handle == frame.Window.Handle &&
+                    current.ProcessId == frame.Window.ProcessId;
+                bool password = UiAutomationReader.FocusedIsPassword();
+                bool secret = decision.Kind == AgentToolKind.TypeText &&
+                    PrivacyFilter.ContainsSecret(decision.Value ?? "");
+                bool unauthorizedSend = AgentTaskPermissions.IsMessagingApp(frame.Window) &&
+                    !AgentTaskPermissions.MaySendMessage(_goal) && _typedInMessageApp &&
+                    decision.Kind == AgentToolKind.PressKeys &&
+                    decision.Value is "ENTER" or "CTRL+ENTER";
+                bool executed = sameForeground && !password && !secret &&
+                    !unauthorizedSend &&
+                    (decision.Kind == AgentToolKind.TypeText
+                        ? AgentKeyboardTool.TypeText(decision.Value ?? "")
+                        : AgentKeyboardTool.PressKeys(decision.Value ?? ""));
+                if (executed) _service._agentActions++;
+                if (executed && AgentTaskPermissions.IsMessagingApp(frame.Window) &&
+                    (decision.Kind == AgentToolKind.TypeText ||
+                     decision.Kind == AgentToolKind.PressKeys && decision.Value == "CTRL+V"))
+                    _typedInMessageApp = true;
+                var result = new AgentActionFeedback(decision, executed,
+                    executed ? "键盘动作已发出；等待新截图验证" :
+                    !sameForeground ? "前台窗口已改变，未输入" :
+                    password ? "当前焦点是密码输入控件" :
+                    unauthorizedSend ? "任务没有明确要求发送消息，已拦截回车" :
+                    secret ? "文本包含敏感凭据，未输入" : "Windows 未接受键盘动作");
+                _conversation.AddToolResult(decision, result);
+                if (executed) await Task.Delay(450, cancellationToken);
+                return result;
+            }
+            if (_quickMode && AgentTaskPermissions.IsMessagingApp(frame.Window) &&
+                !AgentTaskPermissions.MaySendMessage(_goal) &&
+                AgentTaskPermissions.IsSendControl(frame, decision))
+            {
+                var blocked = new AgentActionFeedback(decision, false,
+                    "任务没有明确要求发送消息，已拦截发送按钮");
+                _conversation.AddToolResult(decision, blocked);
+                return blocked;
+            }
+            bool allowed = _quickMode
+                ? AgentMouseTool.IsAllowedDesktop(frame, decision, activity.Foreground(),
+                    out string reason)
+                : AgentMouseTool.IsAllowed(frame, decision, activity.Foreground(),
+                    out reason);
+            if (!allowed)
             {
                 var blocked = new AgentActionFeedback(decision, false, reason);
                 _conversation.AddToolResult(decision, blocked);
@@ -237,12 +358,31 @@ public sealed partial class PerceptionService
             {
                 await Task.Delay(_quickMode ? 680 : 180, cancellationToken);
                 using var freshActivity = new WindowsActivity();
-                bool stillAllowed = AgentMouseTool.IsAllowed(frame, decision,
-                    freshActivity.Foreground(), out string latestReason);
-                bool clicked = stillAllowed && AgentMouseTool.Execute(
-                    decision.Kind == AgentToolKind.Navigate
-                        ? decision with { Kind = AgentToolKind.Click } : decision,
-                    preserveUserCursor: _quickMode);
+                bool stillAllowed = _quickMode
+                    ? AgentMouseTool.IsAllowedDesktop(frame, decision,
+                        freshActivity.Foreground(), out string latestReason)
+                    : AgentMouseTool.IsAllowed(frame, decision,
+                        freshActivity.Foreground(), out latestReason);
+                bool clicked = false;
+                if (stillAllowed)
+                {
+                    if (decision.Kind == AgentToolKind.Drag)
+                        _service.AgentVisual?.Invoke(new AgentActionVisual(true,
+                            AgentToolKind.Drag, decision.TargetX, decision.TargetY,
+                            decision.Label));
+                    clicked = decision.Kind switch
+                    {
+                        AgentToolKind.Scroll => AgentMouseTool.ExecuteScroll(decision.X,
+                            decision.Y, int.Parse(decision.Value!), _quickMode),
+                        AgentToolKind.Drag => AgentMouseTool.ExecuteDrag(decision.X,
+                            decision.Y, decision.TargetX, decision.TargetY, _quickMode,
+                            cancellationToken),
+                        _ => AgentMouseTool.Execute(
+                            decision.Kind == AgentToolKind.Navigate
+                                ? decision with { Kind = AgentToolKind.Click } : decision,
+                            preserveUserCursor: _quickMode)
+                    };
+                }
                 bool executed = clicked;
                 if (clicked && decision.Kind == AgentToolKind.Navigate)
                 {

@@ -46,7 +46,7 @@ internal sealed class AgentCommandWindow : Window
             Background = new SolidColorBrush(Color.FromRgb(26, 45, 56)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(57, 107, 133)),
             CaretBrush = Brushes.White,
-            ToolTip = "例如：打开 Google 浏览器，进入 baidu.com"
+            ToolTip = "例如：打开资源管理器；打开微信并回复指定消息"
         };
         layout.Children.Add(_command);
         layout.Children.Add(new TextBlock

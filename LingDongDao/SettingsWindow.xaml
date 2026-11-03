@@ -484,13 +484,18 @@
                                    Foreground="#9CB0BB" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
                         <Button Content="查看云端调用记录与截图" Width="190" HorizontalAlignment="Left"
                                 Style="{StaticResource SecondaryButton}" Click="OpenCloudHistory_Click" Margin="0,0,0,8"/>
-                        <TextBlock Text="Agent 操作循环" Foreground="#8DD7EC" FontSize="12" Margin="0,12,0,7"/>
-                        <TextBlock Text="写明任务目标并保存，然后切换到目标软件，按“启动 Agent”快捷键。每轮只执行一次左键或右键，随后截图让云端判断；可随时按“停止 Agent”快捷键。"
+                        <TextBlock Text="全桌面 Agent" Foreground="#8DD7EC" FontSize="12" Margin="0,12,0,7"/>
+                        <TextBlock Text="按 Ctrl+Alt+K 召唤，输入任务后按 Enter。它会查看所有显示器，跨软件打开或切换窗口，用蓝色光标点击，也能输入文字、滚动和拖动；每步后截图确认。快捷键可在“启动与快捷键”修改。"
+                                   Foreground="#9CB0BB" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        <local:SettingSlider x:Name="QuickAgentMaxActionsSlider" Label="全桌面 Agent 最多操作步数" Unit="步"
+                                             Minimum="1" Maximum="20" Step="1" Decimals="0"/>
+                        <TextBlock Text="固定窗口 Agent" Foreground="#8DD7EC" FontSize="12" Margin="0,4,0,7"/>
+                        <TextBlock Text="下方旧模式只操作启动时的目标软件。写明任务目标并保存，切换到目标软件后按“启动 Agent”快捷键；可随时按“停止 Agent”快捷键。"
                                    Foreground="#9CB0BB" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,7"/>
                         <TextBox x:Name="AgentGoalBox" Height="70" AcceptsReturn="True" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto" Background="#111C25" Foreground="#E8F1ED"
                                  BorderBrush="#3A5362" Padding="8"/>
-                        <local:SettingSlider x:Name="AgentMaxActionsSlider" Label="Agent 最多操作步数" Unit="步"
+                        <local:SettingSlider x:Name="AgentMaxActionsSlider" Label="固定窗口 Agent 最多操作步数" Unit="步"
                                              Minimum="1" Maximum="20" Step="1" Decimals="0"/>
                         <local:SettingSlider x:Name="CloudDailyBudgetSlider" Label="每日云端预估预算" Unit="美元"
                                              Minimum="0.05" Maximum="5" Step="0.05" Decimals="2"/>

@@ -4,6 +4,12 @@ namespace LingDongDao.Perception;
 
 public sealed class UiAutomationReader
 {
+    public static bool FocusedIsPassword()
+    {
+        try { return AutomationElement.FocusedElement?.Current.IsPassword == true; }
+        catch (Exception) { return false; }
+    }
+
     public IReadOnlyList<GuiElement> Read(WindowInfo? window, int maximumElements = 100)
     {
         if (window is null || window.Handle == 0 || !window.Visible) return [];

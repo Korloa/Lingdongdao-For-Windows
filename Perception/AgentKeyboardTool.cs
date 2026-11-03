@@ -2,13 +2,52 @@ using System.Runtime.InteropServices;
 
 namespace LingDongDao.Perception;
 
-// Sends only the browser address-bar shortcut, Unicode URL text, and Enter.
-// It never touches the clipboard or provides a general command-execution tool.
+// Sends approved shortcuts and Unicode text without using the clipboard.
 internal static class AgentKeyboardTool
 {
     private const uint InputKeyboard = 1;
     private const uint KeyUp = 0x0002, Unicode = 0x0004;
     private const ushort Control = 0x11, L = 0x4C, Enter = 0x0D;
+    private static readonly HashSet<string> Approved = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "WIN", "WIN+E", "WIN+D", "ENTER", "ESC", "TAB", "SHIFT+TAB",
+        "ALT+TAB", "ALT+F4", "CTRL+A", "CTRL+L", "CTRL+C", "CTRL+V",
+        "CTRL+S", "CTRL+Z", "CTRL+F", "CTRL+W", "CTRL+ENTER",
+        "BACKSPACE", "DELETE", "UP", "DOWN", "LEFT", "RIGHT", "SPACE", "F2"
+    };
+    private static readonly Dictionary<string, ushort> VirtualKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["WIN"] = 0x5B, ["CTRL"] = Control, ["ALT"] = 0x12,
+        ["SHIFT"] = 0x10, ["ENTER"] = Enter, ["ESC"] = 0x1B,
+        ["TAB"] = 0x09, ["E"] = 0x45, ["D"] = 0x44,
+        ["A"] = 0x41, ["L"] = L, ["C"] = 0x43, ["V"] = 0x56,
+        ["S"] = 0x53, ["Z"] = 0x5A, ["F"] = 0x46, ["W"] = 0x57,
+        ["F4"] = 0x73, ["F2"] = 0x71, ["BACKSPACE"] = 0x08,
+        ["DELETE"] = 0x2E, ["UP"] = 0x26, ["DOWN"] = 0x28,
+        ["LEFT"] = 0x25, ["RIGHT"] = 0x27, ["SPACE"] = 0x20
+    };
+
+    public static bool IsApprovedShortcut(string? shortcut) =>
+        shortcut is not null && Approved.Contains(shortcut.Trim());
+
+    public static bool PressKeys(string shortcut)
+    {
+        shortcut = shortcut.Trim().ToUpperInvariant();
+        if (!IsApprovedShortcut(shortcut)) return false;
+        string[] parts = shortcut.Split('+');
+        ushort[] keys = parts.Select(part => VirtualKeys[part]).ToArray();
+        var inputs = new List<Input>();
+        foreach (ushort key in keys) inputs.Add(Key(key, false));
+        foreach (ushort key in keys.Reverse()) inputs.Add(Key(key, true));
+        uint sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<Input>());
+        if (sent == inputs.Count) return true;
+        SendInput((uint)keys.Length, keys.Reverse().Select(key => Key(key, true)).ToArray(),
+            Marshal.SizeOf<Input>());
+        return false;
+    }
+
+    public static bool TypeText(string text) => text.Length is >= 1 and <= 1000 &&
+        !text.Any(char.IsControl) && TypeUnicode(text);
 
     public static bool Navigate(string url)
     {

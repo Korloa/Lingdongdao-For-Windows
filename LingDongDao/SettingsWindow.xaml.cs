@@ -56,6 +56,8 @@ public partial class SettingsWindow : Window
         PerceptionSampleSlider.SetCurrentValue(SettingSlider.ValueProperty, options.SampleSeconds);
         PerceptionThresholdSlider.SetCurrentValue(SettingSlider.ValueProperty, options.EscalationThreshold);
         AgentMaxActionsSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)options.AgentMaxActions);
+        QuickAgentMaxActionsSlider.SetCurrentValue(SettingSlider.ValueProperty,
+            (double)options.QuickAgentMaxActions);
         CloudDailyBudgetSlider.SetCurrentValue(SettingSlider.ValueProperty, options.DailyCloudBudgetUsd);
         AgentGoalBox.Text = _working.AgentGoal;
     }
@@ -297,6 +299,7 @@ public partial class SettingsWindow : Window
         _working.Perception.SampleSeconds = PerceptionSampleSlider.Value;
         _working.Perception.EscalationThreshold = PerceptionThresholdSlider.Value;
         _working.Perception.AgentMaxActions = (int)AgentMaxActionsSlider.Value;
+        _working.Perception.QuickAgentMaxActions = (int)QuickAgentMaxActionsSlider.Value;
         _working.Perception.DailyCloudBudgetUsd = CloudDailyBudgetSlider.Value;
         if (_working.Perception.CloudEnabled && !_working.Perception.UploadConsent)
         { ErrorText.Text = "请先明确授权云端截图上传。"; return; }

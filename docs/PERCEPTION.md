@@ -30,9 +30,11 @@ Agent 仅操作启动时的进程；切换到其他软件、隐私检查失败�
 
 ### 快捷指令 Agent
 
-在目标软件前按 **Ctrl+Alt+K**，在弹出的输入框中写任务并按 Enter。可以说“打开 Google 浏览器，进入 baidu.com”。快捷指令模式新增 `open_browser` 与 `navigate` 工具：前者只启动本机 Chrome/Edge 新窗口，后者只在当前 Chrome/Edge 的可见地址栏点击并输入 HTTP(S) 网址；本机回环地址、私有 IP 字面地址及带账号密码的网址会被拒绝。普通点击和右键仍限当前窗口，密码控件不可点击；浏览器启动后只允许切换到预期的浏览器进程，其他意外窗口切换会停止。Agent 不提供通用键盘输入、命令执行或文件读写工具。Windows 锁屏与登录界面不会上传截图。
+按 **Ctrl+Alt+K** 弹出全桌面任务输入框，写自然语言任务并按 Enter。快捷 Agent 每轮将所有显示器拼成一张保留物理屏幕坐标的截图，并附上前台进程、可见窗口清单、OCR 与前台 UI Automation 控件。允许在步骤间切换软件，不再锁定启动时的进程。云端每次只选一个工具：`click`、`right_click`、`double_click`、`drag`、`scroll`、`type_text`、`press_keys`、`wait`、`open_app`、`activate_window`、`open_browser`、`navigate` 或 `finish`。`open_app` 只打开已安装程序的开始菜单快捷方式及少数 Windows 内置程序，不接受可执行文件路径；`activate_window` 只允许选择上一帧可见窗口清单中的句柄。浏览器网址工具仅接受 HTTP(S)，拒绝本机回环地址、私有 IP 字面地址及带账号密码的网址。常用快捷键经过白名单校验；不能调用任意命令或绕过 UAC 安全桌面。
 
-蓝色光标是置顶、点击穿透的独立视觉光标，约 620 ms 平滑移动到目标并停住；真实鼠标在发送点击时短暂定位，若用户没有移动它会恢复原位。截图时蓝色光标会隐藏，防止影响云端识别；每一步重新截图并等待云端确认。Esc 关闭输入框，默认 **Ctrl+Alt+Shift+X** 停止运行。快捷键可在“启动与快捷键”修改；截图授权、密钥、预算与旧 Agent 相同。此模式的 URL 访问已经过 Mock API 与离线协议测试；实际网站加载、浏览器窗口焦点和具体任务的成功率依赖本机与云端返回，不能保证所有自然语言任务都可执行。
+蓝色光标是置顶、点击穿透的独立视觉光标，约 620 ms 平滑移动到目标并停住；真实鼠标在发送点击时短暂定位，若用户没有移动它会恢复原位。截图时蓝色光标会隐藏，防止影响云端识别；每一步重新截图并等待云端确认。Esc 关闭输入框，默认 **Ctrl+Alt+Shift+X** 停止运行。快捷键可在“启动与快捷键”修改；截图授权、密钥、预算与旧 Agent 相同。上传前全桌面 OCR 检查凭据，前台密码控件与敏感后台窗口会在截图中遮挡，锁屏和登录界面会阻止上传。对于 UI Automation 不提供控件信息的软件，密码区域无法保证识别，使用时应避免把敏感内容显示在桌面。任务未明确要求发送时，QQ/微信等常见聊天软件中的发送按钮及输入文字后的回车会被本地拦截；自绘发送控件可能无法识别。QQ/微信的实际发送流程尚未在本机验证。
+
+全桌面模式默认最多 12 步，固定窗口模式默认 8 步；两者可在“桌面感知”分别设置，上限 20。每轮云端判断都计入预算。模型可能选错控件或绕路，达到上限会停止并显示未完成，用户可修改任务后重试。
 
 DeepSeek 的 `deepseek-flash` 支持图片和函数工具调用：[视觉输入](https://api-docs.deepseek.com/guides/vision/)、[工具调用](https://api-docs.deepseek.com/guides/tool_calls/)。由于该 Chat Completions 接口的图片放在 `user` 消息里，程序先回传工具结果，再发送包含新截图的下一条 `user` 消息。工具参数仍由本地校验，云端返回的坐标不直接信任。
 
@@ -111,6 +113,8 @@ Agent 离线回放覆盖点击、右键参数解析、窗口和坐标校验、�
 
 v0.9.0 新增测试覆盖 `open_browser` → `navigate` → 新截图 → `finish` 的 Mock API 完整协议，以及 URL、锁屏隐私、键盘输入结构和蓝色光标点击穿透。`--quick-agent-tool-smoke` 已向真实 DeepSeek 验证五种工具定义可被接受。`--live-quick-agent` 已在 Chrome 前台实际点击地址栏、访问 baidu.com，并在第二张截图后由模型确认百度首页；从资源管理器启动浏览器的实测途中 Windows 会话进入锁屏，浏览器无法到前台，Agent 停止。该情况下已补充锁屏截图排除与新浏览器窗口激活，尚需在未锁屏的桌面再次验证完整的跨进程路径。
 
+v0.9.1 将快捷 Agent 改为整桌面循环。离线测试覆盖负坐标显示器、跨窗口点击校验、全桌面敏感窗口遮挡、应用与窗口工具解析、禁止路径启动，以及 13 种工具定义；`--live-smoke` 在本机测得整桌面 JPEG 为 1536×864、约 0.05 MB。真实云端任务 `--live-desktop-agent` 使用 Win+E 从 Chrome 切到资源管理器并经新截图确认；`--live-text-agent` 从 Chrome 切到记事本、输入“灵动岛测试”并经新截图确认（5 步、6 次云端判断）。未实测 QQ、微信消息发送、UAC 窗口与多显示器实机交互。
+
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
 独立 WPF 界面烟测已验证新版 EXE 能启动，并能通过 Ctrl+Alt+D 打开感知设置面板；测试后已恢复原安装版进程。该界面进程本身曾观察到约 214 MB 工作集（当时感知关闭），因此启用增强模式后整款应用可能超过 500 MB；上面的 417～450 MB 是感知测试宿主与模型进程合计值，不代表完整灵动岛的内存上限。
@@ -123,7 +127,7 @@ v0.9.0 新增测试覆盖 `open_browser` → `navigate` → 新截图 → `finis
 | `Perception/ScreenCapture.cs`, `ChangeDetector.cs`, `WindowsActivity.cs`, `UiAutomationReader.cs` | 采集和初筛 |
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
 | `Perception/CloudCallHistory.cs`, `LingDongDao/CloudHistoryWindow.xaml` | 本机加密调用记录及截图、完整回复查看 |
-| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `PerceptionService.Agent.cs` | Agent 循环、云端函数工具、浏览器启动、受限网址输入和运行控制 |
+| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `DesktopAppTool.cs`, `DesktopWindowTool.cs`, `DesktopWindowInventory.cs`, `PerceptionService.Agent.cs` | 全桌面 Agent 循环、输入工具、软件与窗口切换、受限网址输入和运行控制 |
 | `LingDongDao/AgentActionOverlay.cs`, `AgentGhostCursorOverlay.cs`, `AgentCommandWindow.cs` | 点击坐标浮层、蓝色光标和快捷指令输入框 |
 | `LingDongDao/PerceptionDebugOverlay.cs` | OCR/GUI 识别框与坐标调试浮层，Windows 截图排除 |
 | `LingDongDao/CurrentWeather.cs` | 当前温度、WMO 天气代码及更新时间解析 |

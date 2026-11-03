@@ -19,6 +19,7 @@ public static class PrivacyFilter
     private static readonly Regex Secret = new(
         @"\b(?:sk-[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{16}|Bearer\s+[A-Za-z0-9._~-]{12,}|(?:api[_ -]?key|secret|token)\s*[:=]\s*\S{12,})",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    public static bool ContainsSecret(string value) => Secret.IsMatch(value);
 
     public static bool IsSensitive(WindowInfo? window, PerceptionOptions options) =>
         window is null || new[] { "LockApp", "LogonUI", "CredentialUIBroker" }
@@ -64,6 +65,32 @@ public static class PrivacyFilter
             observation.Window.Title, crop, screenshot, beforeJpeg, safeOcr, safeGui,
             observation.InteractionEvents, memory.RecentSummaries(observation.Time), assessment,
             observation.Change.Reasons);
+    }
+
+    public static CloudEventPackage? BuildDesktop(DesktopObservation observation,
+        LocalAssessment assessment, FrameRingBuffer frames, StateMemory memory,
+        PerceptionOptions options, IReadOnlyList<WindowInfo> visibleWindows)
+    {
+        if (!options.UploadConsent || !options.CloudEnabled ||
+            IsSensitive(observation, options) ||
+            memory.RecentSummaries(observation.Time).Any(Secret.IsMatch)) return null;
+        CapturedFrame? current = frames.Find(observation.ScreenshotId);
+        if (current is null || observation.Window is null) return null;
+        PixelRect desktop = current.Display.Bounds;
+        var sensitive = observation.GuiElements.Where(item => item.IsPassword)
+            .Select(item => item.Bounds).Concat(visibleWindows.Where(item =>
+                item.Handle != observation.Window.Handle &&
+                (IsSensitive(item, options) || Secret.IsMatch(item.Title)))
+                .Select(item => item.Bounds)).ToArray();
+        byte[] screenshot = CropAndMask(current, desktop, sensitive);
+        var safeOcr = observation.Ocr.Where(item =>
+            !sensitive.Any(rect => rect.Intersects(item.Bounds))).ToArray();
+        var safeGui = observation.GuiElements.Select(item => item.IsPassword
+            ? item with { Name = "[password]" } : item).ToArray();
+        return new CloudEventPackage(observation.Time, observation.Window.ProcessName,
+            observation.Window.Title, desktop, screenshot, null, safeOcr, safeGui,
+            observation.InteractionEvents, memory.RecentSummaries(observation.Time),
+            assessment, observation.Change.Reasons);
     }
 
     private static byte[] CropAndMask(CapturedFrame frame, PixelRect crop,

@@ -7,6 +7,7 @@ public static class AgentMouseTool
     private const uint InputMouse = 0;
     private const uint LeftDown = 0x0002, LeftUp = 0x0004;
     private const uint RightDown = 0x0008, RightUp = 0x0010;
+    private const uint Wheel = 0x0800;
 
     public static bool IsAllowed(AgentLoopFrame frame, AgentToolDecision action,
         WindowInfo? foreground, out string reason)
@@ -26,9 +27,35 @@ public static class AgentMouseTool
         return true;
     }
 
+    public static bool IsAllowedDesktop(AgentLoopFrame frame, AgentToolDecision action,
+        WindowInfo? foreground, out string reason)
+    {
+        if (foreground is null || foreground.Handle != frame.Window.Handle ||
+            foreground.ProcessId != frame.Window.ProcessId)
+        { reason = "桌面前台已改变，请重新截图"; return false; }
+        if (action.Kind is AgentToolKind.TypeText or AgentToolKind.PressKeys or AgentToolKind.Wait)
+        { reason = "allowed"; return true; }
+        if (action.Kind is not (AgentToolKind.Click or AgentToolKind.RightClick or
+            AgentToolKind.DoubleClick or AgentToolKind.Scroll or AgentToolKind.Drag or
+            AgentToolKind.Navigate))
+        { reason = "不是桌面输入动作"; return false; }
+        if (!frame.Bounds.Contains(action.X, action.Y) ||
+            action.Kind == AgentToolKind.Drag &&
+            !frame.Bounds.Contains(action.TargetX, action.TargetY))
+        { reason = "坐标不在桌面截图范围内"; return false; }
+        if (frame.Package.Gui.Any(item => item.IsPassword &&
+            (item.Bounds.Contains(action.X, action.Y) ||
+             action.Kind == AgentToolKind.Drag &&
+             item.Bounds.Contains(action.TargetX, action.TargetY))))
+        { reason = "坐标位于密码输入区域"; return false; }
+        reason = "allowed";
+        return true;
+    }
+
     public static bool Execute(AgentToolDecision action, bool preserveUserCursor = false)
     {
-        if (action.Kind is not (AgentToolKind.Click or AgentToolKind.RightClick)) return false;
+        if (action.Kind is not (AgentToolKind.Click or AgentToolKind.RightClick or
+            AgentToolKind.DoubleClick)) return false;
         NativePoint old = default;
         bool restore = preserveUserCursor && GetCursorPos(out old);
         if (!SetCursorPos(action.X, action.Y)) return false;
@@ -41,9 +68,11 @@ public static class AgentMouseTool
                 new Input { Type = InputMouse, Mouse = new MouseInput { Flags = down } },
                 new Input { Type = InputMouse, Mouse = new MouseInput { Flags = up } }
             };
-            uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
-            if (sent == inputs.Length) return true;
-            if (sent == 1) SendInput(1, [inputs[1]], Marshal.SizeOf<Input>());
+            Input[] sequence = action.Kind == AgentToolKind.DoubleClick
+                ? [..inputs, ..inputs] : inputs;
+            uint sent = SendInput((uint)sequence.Length, sequence, Marshal.SizeOf<Input>());
+            if (sent == sequence.Length) return true;
+            if (sent > 0) SendInput(1, [inputs[1]], Marshal.SizeOf<Input>());
             return false;
         }
         finally
@@ -51,6 +80,55 @@ public static class AgentMouseTool
             if (restore && GetCursorPos(out NativePoint current) &&
                 current.X == action.X && current.Y == action.Y)
                 SetCursorPos(old.X, old.Y);
+        }
+    }
+
+    public static bool ExecuteScroll(int x, int y, int delta, bool preserveUserCursor)
+    {
+        NativePoint old = default;
+        bool restore = preserveUserCursor && GetCursorPos(out old);
+        if (!SetCursorPos(x, y)) return false;
+        try
+        {
+            var input = new Input { Type = InputMouse, Mouse = new MouseInput
+            { Flags = Wheel, MouseData = unchecked((uint)delta) } };
+            return SendInput(1, [input], Marshal.SizeOf<Input>()) == 1;
+        }
+        finally
+        {
+            if (restore && GetCursorPos(out NativePoint current) &&
+                current.X == x && current.Y == y) SetCursorPos(old.X, old.Y);
+        }
+    }
+
+    public static bool ExecuteDrag(int x, int y, int targetX, int targetY,
+        bool preserveUserCursor, CancellationToken cancellationToken)
+    {
+        NativePoint old = default;
+        bool restore = preserveUserCursor && GetCursorPos(out old);
+        if (!SetCursorPos(x, y)) return false;
+        bool down = false;
+        try
+        {
+            down = SendInput(1, [new Input { Type = InputMouse,
+                Mouse = new MouseInput { Flags = LeftDown } }], Marshal.SizeOf<Input>()) == 1;
+            if (!down) return false;
+            for (int step = 1; step <= 18; step++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int nextX = x + (targetX - x) * step / 18;
+                int nextY = y + (targetY - y) * step / 18;
+                if (!SetCursorPos(nextX, nextY)) return false;
+                Thread.Sleep(18);
+            }
+            return true;
+        }
+        finally
+        {
+            if (down) SendInput(1, [new Input { Type = InputMouse,
+                Mouse = new MouseInput { Flags = LeftUp } }], Marshal.SizeOf<Input>());
+            if (restore && GetCursorPos(out NativePoint current) &&
+                current.X == targetX && current.Y == targetY) SetCursorPos(old.X, old.Y);
         }
     }
 
