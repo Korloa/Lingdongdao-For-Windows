@@ -53,7 +53,9 @@ public sealed partial class PerceptionService : IDisposable
     public int FrameCount => _frames.Count;
     public bool IsRunning => _loop is { IsCompleted: false };
     public string OcrStatus => _ocr.Status;
-    public string GuiStatus => _gui.Status;
+    public string GuiStatus => _options().Mode != ResourceMode.Enhanced
+        ? "当前资源模式未运行 GUI" : !_options().GuiDetectorEnabled
+            ? "GUI 检测已关闭" : _gui.Status;
     public bool CloudConfigured => _cloud.Available;
     public string CloudModel => _cloud.Model;
     public string CloudLastStatus { get; private set; } = "未验证";

@@ -10,6 +10,32 @@ using LingDongDao.Perception;
 using ActivityEvent = LingDongDao.Perception.ActivityEvent;
 using System.Windows.Threading;
 
+// The same test executable acts as a tiny JSON-lines worker for recovery tests.
+if (args.LastOrDefault()?.EndsWith(".fake-ocr-worker", StringComparison.Ordinal) == true ||
+    args.LastOrDefault()?.EndsWith(".fake-gui-worker", StringComparison.Ordinal) == true)
+{
+    string workerFile = args[^1];
+    bool guiWorker = workerFile.EndsWith(".fake-gui-worker", StringComparison.Ordinal);
+    Console.WriteLine(JsonSerializer.Serialize(new { ready = true, pid = Environment.ProcessId }));
+    string? request = Console.ReadLine();
+    if (request is not null)
+    {
+        using JsonDocument document = JsonDocument.Parse(request);
+        int id = document.RootElement.GetProperty("id").GetInt32();
+        string marker = workerFile + ".seen";
+        bool first = !File.Exists(marker);
+        if (first) File.WriteAllText(marker, "1");
+        if (first && workerFile.Contains("timeout", StringComparison.Ordinal))
+            Thread.Sleep(900);
+        if (first && workerFile.Contains("mismatch", StringComparison.Ordinal))
+            id++;
+        Console.WriteLine(guiWorker
+            ? JsonSerializer.Serialize(new { id, elements = Array.Empty<object>() })
+            : JsonSerializer.Serialize(new { id, words = Array.Empty<object>() }));
+    }
+    return;
+}
+
 static void Check(bool condition, string caseName)
 {
     if (!condition) throw new Exception("FAIL: " + caseName);
@@ -291,6 +317,68 @@ var passwordGui = packaged with { GuiElements = [new GuiElement("secret", "Edit"
     new PixelRect(20, 20, 100, 30), true, true, "uia", null)] };
 Check(PrivacyFilter.Build(passwordGui, firstError, frames, memory, options)?.BeforeJpeg is null,
     "8f previous screenshot omitted when password field exists");
+
+foreach (string failure in new[] { "timeout", "mismatch" })
+{
+    string fakeWorker = Path.Combine(Path.GetTempPath(),
+        $"lingdongdao-{failure}-{Guid.NewGuid():N}.fake-ocr-worker");
+    File.WriteAllText(fakeWorker, "test worker marker");
+    try
+    {
+        using var bridge = new PythonOcrBridge(Environment.ProcessPath, fakeWorker,
+            TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromMilliseconds(250));
+        IReadOnlyList<OcrText> failed = await bridge.RecognizeAsync([1, 2, 3],
+            new PixelRect(0, 0, 20, 20), now, CancellationToken.None);
+        Check(failed.Count == 0 && !bridge.Available && bridge.Status.Contains("retry"),
+            $"8f1 OCR {failure} closes the worker and schedules retry");
+        await Task.Delay(650);
+        IReadOnlyList<OcrText> recovered = await bridge.RecognizeAsync([1, 2, 3],
+            new PixelRect(0, 0, 20, 20), now, CancellationToken.None);
+        Check(recovered.Count == 0 && bridge.Available && bridge.Status.StartsWith("ready"),
+            $"8f2 OCR recovers after {failure} without restarting the app");
+    }
+    finally
+    {
+        File.Delete(fakeWorker);
+        File.Delete(fakeWorker + ".seen");
+    }
+}
+
+foreach (string failure in new[] { "timeout", "mismatch" })
+{
+    string fakeWorker = Path.Combine(Path.GetTempPath(),
+        $"lingdongdao-{failure}-{Guid.NewGuid():N}.fake-gui-worker");
+    string fakeModel = fakeWorker + ".onnx";
+    File.WriteAllText(fakeWorker, "test worker marker");
+    File.WriteAllText(fakeModel, "test model marker");
+    try
+    {
+        using var bridge = new PythonGuiDetector(Environment.ProcessPath, fakeWorker, fakeModel,
+            TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromMilliseconds(250));
+        IReadOnlyList<GuiElement> failed = await bridge.DetectAsync([1, 2, 3],
+            new PixelRect(0, 0, 20, 20), CancellationToken.None);
+        Check(failed.Count == 0 && !bridge.Available && bridge.Status.Contains("retry"),
+            $"8f3 GUI {failure} closes the worker and schedules retry");
+        await Task.Delay(650);
+        IReadOnlyList<GuiElement> recovered = await bridge.DetectAsync([1, 2, 3],
+            new PixelRect(0, 0, 20, 20), CancellationToken.None);
+        Check(recovered.Count == 0 && bridge.Available && bridge.Status.StartsWith("ready"),
+            $"8f4 GUI recovers after {failure} without restarting the app");
+    }
+    finally
+    {
+        File.Delete(fakeWorker);
+        File.Delete(fakeWorker + ".seen");
+        File.Delete(fakeModel);
+    }
+}
+
+using (var lowModeStatus = new PerceptionService(() => new PerceptionOptions
+       { Mode = ResourceMode.Low, GuiDetectorEnabled = true }))
+    Check(lowModeStatus.GuiStatus.Contains("资源模式"),
+        "8f5 low resource mode explains why GUI has not started");
 
 var agentFrame = new AgentLoopFrame(terminal, cloudPackage!.ScreenshotBounds,
     cloudPackage.CurrentJpeg, cloudPackage, packaged);

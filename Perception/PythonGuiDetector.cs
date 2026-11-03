@@ -7,11 +7,31 @@ namespace LingDongDao.Perception;
 public sealed class PythonGuiDetector : IGuiDetector, IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly string _pythonPath;
+    private readonly string _workerPath;
+    private readonly string _modelPath;
+    private readonly TimeSpan _responseTimeout;
+    private readonly TimeSpan _firstResponseTimeout;
+    private readonly TimeSpan _retryBase;
     private Process? _process;
     private int _nextId;
     private int _workerPid;
-    private bool _failed;
+    private int _failures;
+    private long _retryAtUtcTicks;
+    private bool _freshWorker;
     public string Status { get; private set; } = "not started";
+
+    public PythonGuiDetector(string? pythonPath = null, string? workerPath = null,
+        string? modelPath = null, TimeSpan? responseTimeout = null, TimeSpan? retryBase = null,
+        TimeSpan? firstResponseTimeout = null)
+    {
+        _pythonPath = pythonPath ?? PythonRuntime.PythonPath;
+        _workerPath = workerPath ?? Path.Combine(AppContext.BaseDirectory, "perception_py", "gui_worker.py");
+        _modelPath = modelPath ?? PythonRuntime.ModelPath;
+        _responseTimeout = responseTimeout ?? TimeSpan.FromSeconds(25);
+        _firstResponseTimeout = firstResponseTimeout ?? TimeSpan.FromSeconds(60);
+        _retryBase = retryBase ?? TimeSpan.FromSeconds(10);
+    }
     public double WorkerMb
     {
         get
@@ -43,11 +63,8 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
         }
     }
 
-    private static string PythonPath => PythonRuntime.PythonPath;
-    private static string WorkerPath => Path.Combine(AppContext.BaseDirectory,
-        "perception_py", "gui_worker.py");
-    private static string ModelPath => PythonRuntime.ModelPath;
-    public bool Available => !_failed && File.Exists(WorkerPath) && File.Exists(ModelPath);
+    public bool Available => File.Exists(_workerPath) && File.Exists(_modelPath) &&
+        DateTime.UtcNow.Ticks >= Interlocked.Read(ref _retryAtUtcTicks);
 
     public async Task<IReadOnlyList<GuiElement>> DetectAsync(byte[] image, PixelRect screenBounds,
         CancellationToken cancellationToken)
@@ -56,6 +73,7 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            if (!Available) return [];
             await EnsureStartedAsync(cancellationToken);
             if (_process is null || _process.HasExited) return [];
             int id = Interlocked.Increment(ref _nextId);
@@ -63,14 +81,17 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
                 { id, jpeg = Convert.ToBase64String(image) }).AsMemory(), cancellationToken);
             await _process.StandardInput.FlushAsync(cancellationToken);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(25));
+            TimeSpan responseLimit = _freshWorker ? _firstResponseTimeout : _responseTimeout;
+            timeout.CancelAfter(responseLimit);
             string? line = await _process.StandardOutput.ReadLineAsync(timeout.Token);
             if (line is null) throw new IOException("GUI worker closed output");
             using JsonDocument result = JsonDocument.Parse(line);
             if (result.RootElement.TryGetProperty("error", out var error))
                 throw new InvalidOperationException(error.GetString());
-            if (result.RootElement.GetProperty("id").GetInt32() != id)
-                throw new InvalidOperationException("GUI worker response mismatch");
+            int responseId = result.RootElement.GetProperty("id").GetInt32();
+            if (responseId != id)
+                throw new InvalidOperationException(
+                    $"GUI worker response mismatch (expected {id}, got {responseId})");
             var elements = new List<GuiElement>();
             foreach (JsonElement item in result.RootElement.GetProperty("elements").EnumerateArray())
             {
@@ -81,13 +102,27 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
                     true, false, "gpa_onnx", item.GetProperty("score").GetDouble()));
             }
             Status = $"ready; {elements.Count} regions";
+            _freshWorker = false;
+            Interlocked.Exchange(ref _failures, 0);
+            Interlocked.Exchange(ref _retryAtUtcTicks, 0);
             return elements;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            TimeSpan limit = _freshWorker ? _firstResponseTimeout : _responseTimeout;
+            StopWorker();
+            MarkFailure($"GUI worker timed out after {limit.TotalSeconds:0.#}s");
+            return [];
+        }
+        catch (OperationCanceledException)
+        {
+            StopWorker();
+            throw;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            Status = exception.GetType().Name + ": " + exception.Message;
             StopWorker();
-            _failed = true;
+            MarkFailure(exception.GetType().Name + ": " + exception.Message);
             return [];
         }
         finally { _gate.Release(); }
@@ -96,17 +131,18 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
     private async Task EnsureStartedAsync(CancellationToken cancellationToken)
     {
         if (_process is { HasExited: false }) return;
-        var info = new ProcessStartInfo(PythonPath)
+        var info = new ProcessStartInfo(_pythonPath)
         {
             UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
             RedirectStandardError = true, StandardInputEncoding = new UTF8Encoding(false),
             StandardOutputEncoding = Encoding.UTF8, CreateNoWindow = true
         };
         info.ArgumentList.Add("-u");
-        info.ArgumentList.Add(WorkerPath);
-        info.Environment["LINGDONGDAO_GUI_MODEL"] = ModelPath;
+        info.ArgumentList.Add(_workerPath);
+        info.Environment["LINGDONGDAO_GUI_MODEL"] = _modelPath;
         info.Environment["OMP_NUM_THREADS"] = "2";
         _process = Process.Start(info) ?? throw new IOException("Could not start GUI worker");
+        _freshWorker = true;
         _process.ErrorDataReceived += (_, _) => { };
         _process.BeginErrorReadLine();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -117,6 +153,7 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
         if (!ready.RootElement.GetProperty("ready").GetBoolean())
             throw new IOException(ready.RootElement.GetProperty("error").GetString());
         _workerPid = ready.RootElement.GetProperty("pid").GetInt32();
+        _freshWorker = true;
         Status = "ready";
     }
 
@@ -128,6 +165,15 @@ public sealed class PythonGuiDetector : IGuiDetector, IDisposable
         _process.Dispose();
         _process = null;
         _workerPid = 0;
+        _freshWorker = false;
+    }
+
+    private void MarkFailure(string reason)
+    {
+        int failures = Math.Min(Interlocked.Increment(ref _failures), 6);
+        double delayMs = Math.Min(_retryBase.TotalMilliseconds * Math.Pow(2, failures - 1), 120_000);
+        Interlocked.Exchange(ref _retryAtUtcTicks, DateTime.UtcNow.AddMilliseconds(delayMs).Ticks);
+        Status = $"{reason}; retry in {delayMs / 1000:0.#}s";
     }
 
     public void Dispose() { StopWorker(); _gate.Dispose(); }

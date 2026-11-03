@@ -1,4 +1,4 @@
-#define AppVersion "0.8.1"
+#define AppVersion "0.8.2"
 #define AppName "灵动岛"
 
 [Setup]
