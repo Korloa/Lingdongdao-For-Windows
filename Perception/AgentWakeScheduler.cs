@@ -18,13 +18,15 @@ public sealed class AgentWakeScheduler : IDisposable
     private readonly System.Threading.Timer _timer;
     private List<AgentWakeJob> _jobs;
     private bool _disposed;
+    private bool _started;
 
     public static string DefaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "LingDongDao", "agent-wakes.dpapi");
 
     public AgentWakeScheduler(Action<AgentWakeJob> wake, string? path = null,
-        Func<DateTimeOffset>? now = null, Action<Exception>? error = null)
+        Func<DateTimeOffset>? now = null, Action<Exception>? error = null,
+        bool autoStart = true)
     {
         _wake = wake;
         _error = error;
@@ -37,7 +39,17 @@ public sealed class AgentWakeScheduler : IDisposable
             catch (Exception exception) { _error?.Invoke(exception); }
         }, null,
             Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        lock (_sync) Arm();
+        if (autoStart) Start();
+    }
+
+    public void Start()
+    {
+        lock (_sync)
+        {
+            if (_disposed || _started) return;
+            _started = true;
+            Arm();
+        }
     }
 
     public IReadOnlyList<AgentWakeJob> Pending
@@ -87,7 +99,7 @@ public sealed class AgentWakeScheduler : IDisposable
 
     private void Arm()
     {
-        if (_disposed) return;
+        if (_disposed || !_started) return;
         if (_jobs.Count == 0) { _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); return; }
         TimeSpan delay = _jobs.Min(item => item.DueAt) - _now();
         if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;

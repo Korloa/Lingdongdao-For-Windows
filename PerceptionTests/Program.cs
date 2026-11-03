@@ -559,6 +559,18 @@ try
             fired[0].Context == "查看播放页",
             "8i6 wake survives app restart and fires once at due time");
     }
+    using (var scheduler = new AgentWakeScheduler(fired.Add, testWake,
+        () => fakeNow, autoStart: false))
+    {
+        scheduler.Schedule("启动后到期的任务", "确认主窗口已启动", TimeSpan.FromSeconds(10));
+        fakeNow = fakeNow.AddSeconds(10);
+        Thread.Sleep(40);
+        Check(fired.Count == 1 && scheduler.Pending.Count == 1,
+            "8i7 startup defers overdue jobs until UI event handlers are ready");
+        scheduler.Start();
+        Check(SpinWait.SpinUntil(() => fired.Count == 2, TimeSpan.FromSeconds(2)) &&
+            scheduler.Pending.Count == 0, "8i8 overdue job fires after scheduler starts");
+    }
 }
 finally { if (File.Exists(testWake)) File.Delete(testWake); }
 using (var disabledAgent = new PerceptionService(() => new PerceptionOptions()))

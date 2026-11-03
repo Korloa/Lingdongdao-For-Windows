@@ -69,13 +69,15 @@ public sealed partial class PerceptionService : IDisposable
     {
         _options = options;
         _wakes = new AgentWakeScheduler(OnAgentWake, error: exception =>
-            Log("warn", "agent", "wake_error", exception.GetType().Name));
+            Log("warn", "agent", "wake_error", exception.GetType().Name),
+            autoStart: false);
     }
 
     // Called on the WPF UI thread so the native hooks have a message pump.
     public void Refresh()
     {
         if (_disposed) return;
+        _wakes.Start();
         PerceptionOptions options = _options();
         options.Normalize();
         if (!options.Enabled || options.Paused)
