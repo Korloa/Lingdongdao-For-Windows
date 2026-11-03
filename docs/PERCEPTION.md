@@ -34,7 +34,7 @@ Agent 仅操作启动时的进程；切换到其他软件、隐私检查失败�
 
 蓝色光标是置顶、点击穿透的独立视觉光标，约 620 ms 平滑移动到目标并停住；真实鼠标在发送点击时短暂定位，若用户没有移动它会恢复原位。截图时蓝色光标会隐藏，防止影响云端识别；每一步重新截图并等待云端确认。Esc 关闭输入框，默认 **Ctrl+Alt+Shift+X** 停止运行。快捷键可在“启动与快捷键”修改；截图授权、密钥、预算与旧 Agent 相同。上传前全桌面 OCR 检查凭据，前台密码控件与敏感后台窗口会在截图中遮挡，锁屏和登录界面会阻止上传。对于 UI Automation 不提供控件信息的软件，密码区域无法保证识别，使用时应避免把敏感内容显示在桌面。任务未明确要求发送时，QQ/微信等常见聊天软件中的发送按钮及输入文字后的回车会被本地拦截；自绘发送控件可能无法识别。QQ/微信的实际发送流程尚未在本机验证。
 
-全桌面模式默认最多 12 步，固定窗口模式默认 8 步；两者可在“桌面感知”分别设置，上限 20。每轮云端判断都计入预算。模型可能选错控件或绕路，达到上限会停止并显示未完成，用户可修改任务后重试。
+全桌面模式默认最多 24 步、上限 40 步，固定窗口模式默认 8 步；两者可在“桌面感知”分别设置。每轮云端判断都计入预算。模型可能选错控件或绕路，达到上限会停止并显示未完成，用户可修改任务后重试。
 
 DeepSeek 的 `deepseek-flash` 支持图片和函数工具调用：[视觉输入](https://api-docs.deepseek.com/guides/vision/)、[工具调用](https://api-docs.deepseek.com/guides/tool_calls/)。由于该 Chat Completions 接口的图片放在 `user` 消息里，程序先回传工具结果，再发送包含新截图的下一条 `user` 消息。工具参数仍由本地校验，云端返回的坐标不直接信任。
 
@@ -119,6 +119,8 @@ v0.10.0 增加光标造型、发光、移动曲线、操作与输入节奏的设
 
 v0.10.1 将定时器启动延迟到主窗口 `Loaded` 后，确保重启时已经到期的任务先完成 UI 事件绑定再唤醒；离线回放新增对这一时序的检查。
 
+v0.11.0 增加 `create_folder`、`create_text_file` 和 `open_created_file` 三个全桌面 Agent 工具。创建文件只接受绝对本地路径和 HTML/CSS/JS/JSON/TXT/Markdown 文本，不覆盖现有内容；打开工具只接受本轮新建的路径。任务中明确写出的 HTML 文件名会被保留。VS Code、资源管理器和 Chrome 的新文件流程都经过真实桌面及云端循环测试，截图会在每步之后重新采集。浏览器预览任务只有本轮新建的指定文件已打开且浏览器位于前台时才能成功结束；模型错误工具参数会作为可恢复反馈进入下一轮。复杂任务的实际成功率仍取决于屏幕状态、云端模型和 Windows 焦点状态，UAC 交互尚未实测。
+
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
 独立 WPF 界面烟测已验证新版 EXE 能启动，并能通过 Ctrl+Alt+D 打开感知设置面板；测试后已恢复原安装版进程。该界面进程本身曾观察到约 214 MB 工作集（当时感知关闭），因此启用增强模式后整款应用可能超过 500 MB；上面的 417～450 MB 是感知测试宿主与模型进程合计值，不代表完整灵动岛的内存上限。
@@ -131,7 +133,7 @@ v0.10.1 将定时器启动延迟到主窗口 `Loaded` 后，确保重启时已�
 | `Perception/ScreenCapture.cs`, `ChangeDetector.cs`, `WindowsActivity.cs`, `UiAutomationReader.cs` | 采集和初筛 |
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
 | `Perception/CloudCallHistory.cs`, `LingDongDao/CloudHistoryWindow.xaml` | 本机加密调用记录及截图、完整回复查看 |
-| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `DesktopAppTool.cs`, `DesktopWindowTool.cs`, `DesktopWindowInventory.cs`, `PerceptionService.Agent.cs` | 全桌面 Agent 循环、输入工具、软件与窗口切换、受限网址输入和运行控制 |
+| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentFileTool.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `DesktopAppTool.cs`, `DesktopWindowTool.cs`, `DesktopWindowInventory.cs`, `PerceptionService.Agent.cs` | 全桌面 Agent 循环、文件创建与预览、输入工具、软件与窗口切换、受限网址输入和运行控制 |
 | `Perception/AgentSkillStore.cs`, `AgentWakeScheduler.cs` | 加密的成功步骤经验和单次计时唤醒 |
 | `LingDongDao/AgentActionOverlay.cs`, `AgentGhostCursorOverlay.cs`, `AgentCommandWindow.cs` | 点击坐标浮层、蓝色光标和快捷指令输入框 |
 | `LingDongDao/PerceptionDebugOverlay.cs` | OCR/GUI 识别框与坐标调试浮层，Windows 截图排除 |
@@ -145,4 +147,4 @@ v0.10.1 将定时器启动延迟到主窗口 `Loaded` 后，确保重启时已�
 
 ## 当前边界
 
-UIA 不支持的应用不会得到真实控件类型；增强模型也只能给出可交互区域。当前只识别有终端上下文和变化/交互证据的错误，其他事件仍需标注样本扩展规则或训练模型。任务级记忆只有粗略的活动类别，没有长期语义计划。隐私过滤是保守的工程防线，不能保证识别所有屏幕秘密；首次开启云端必须手动授权，建议在可信窗口和可信供应商下使用。没有自动文件修改、命令执行或消息发送能力。
+UIA 不支持的应用不会得到真实控件类型；增强模型也只能给出可交互区域。当前只识别有终端上下文和变化/交互证据的错误，其他事件仍需标注样本扩展规则或训练模型。任务级记忆只有粗略的活动类别，没有长期语义计划。隐私过滤是保守的工程防线，不能保证识别所有屏幕秘密；首次开启云端必须手动授权，建议在可信窗口和可信供应商下使用。文件工具只创建新文件，不修改已有文件；没有任意命令执行能力，消息发送仍需用户在任务中明确提出。

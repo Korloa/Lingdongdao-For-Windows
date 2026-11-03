@@ -32,7 +32,9 @@ public static class AgentBrowserTool
 
     public static void FocusNewWindow(string browser, IReadOnlySet<nint> previous)
     {
-        nint target = SnapshotWindows(browser).FirstOrDefault(handle => !previous.Contains(handle));
+        HashSet<nint> available = SnapshotWindows(browser);
+        nint target = available.FirstOrDefault(handle => !previous.Contains(handle));
+        if (target == nint.Zero) target = available.FirstOrDefault();
         if (target == nint.Zero) return;
         ShowWindow(target, 9); // SW_RESTORE
         if (SetForegroundWindow(target)) return;

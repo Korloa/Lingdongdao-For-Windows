@@ -89,7 +89,7 @@ var classifier = new RuleClassifier();
 var memory = new StateMemory();
 var options = new PerceptionOptions { Enabled = true, CloudEnabled = true,
     UploadConsent = true, EscalationThreshold = 0.8, CooldownSeconds = 0 };
-Check(options.QuickAgentMaxActions == 12 && options.AgentMaxActions == 8,
+Check(options.QuickAgentMaxActions == 24 && options.AgentMaxActions == 8,
     "0 independent action limits for full desktop and fixed-window agents");
 
 DesktopObservation browsing = Observation(Frame(now, browser));
@@ -460,15 +460,70 @@ Check(AgentTaskPermissions.IsMessagingApp(chatWindow) &&
     { Window = chatWindow, Package = cloudPackage with { Gui = [sendButton] } },
         clickAction),
     "8g3c2 chat send controls require an explicit messaging task");
-bool unsafeShortcutRejected = false, legacyToolRejected = false;
-try { ConfigurableCloudAgent.ParseAgentToolResponse(
-    ToolEnvelope("press_keys", new { keys = "CTRL+ALT+DELETE", label = "测试" }), true); }
-catch (InvalidDataException) { unsafeShortcutRejected = true; }
-try { ConfigurableCloudAgent.ParseAgentToolResponse(
-    ToolEnvelope("type_text", new { text = "你好", label = "测试" })); }
-catch (InvalidDataException) { legacyToolRejected = true; }
-Check(unsafeShortcutRejected && legacyToolRejected,
-    "8g3d unsupported shortcuts and generic tools in legacy mode are rejected");
+AgentToolDecision unsafeShortcut = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("press_keys", new { keys = "CTRL+ALT+DELETE", label = "测试" }), true);
+AgentToolDecision legacyTool = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("type_text", new { text = "你好", label = "测试" }));
+Check(unsafeShortcut.Kind == AgentToolKind.Rejected &&
+    legacyTool.Kind == AgentToolKind.Rejected &&
+    unsafeShortcut.Value!.Contains("Unsupported keyboard shortcut"),
+    "8g3d unsupported shortcuts return recoverable tool feedback");
+AgentLoopOutcome rejectedRecovery = await new AgentLoopEngine().RunAsync(
+    new RejectedThenFinishEnvironment(agentFrame, unsafeShortcut), 2, null,
+    CancellationToken.None);
+Check(rejectedRecovery.Success && rejectedRecovery.Actions == 1 &&
+    rejectedRecovery.CloudCalls == 2,
+    "8g3d0 agent loop continues after an unsupported shortcut");
+AgentToolDecision multilineCode = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("type_text", new { text = "<!doctype html>\n<html>\n</html>",
+        label = "输入 HTML" }), true);
+AgentToolDecision newFileKeys = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("press_keys", new { keys = "CTRL+SHIFT+S", label = "另存为" }), true);
+Check(multilineCode.Kind == AgentToolKind.TypeText &&
+    multilineCode.Value!.Contains('\n') &&
+    newFileKeys.Kind == AgentToolKind.PressKeys &&
+    AgentTaskPermissions.MayCreateFiles("在 VS Code 中创建 HTML 文件并写代码") &&
+    !AgentTaskPermissions.MayCreateFiles("打开网页看看"),
+    "8g3d1 multiline code and file creation shortcuts are supported");
+Check(AgentTaskPermissions.RequestedHtmlFileNames("创建 index.html 后打开")
+        .Contains("index.html") &&
+    AgentTaskPermissions.RequestedHtmlFileNames("创建 HTML 页面").Count == 0,
+    "8g3d1a explicitly requested HTML filename is preserved");
+string fileTestFolder = Path.Combine(Path.GetTempPath(),
+    "ldd-agent-files-" + Guid.NewGuid().ToString("N"));
+string fileTestHtml = Path.Combine(fileTestFolder, "index.html");
+try
+{
+    string html = "<!doctype html>\n<html lang=\"zh-CN\">\n<body>测试</body>\n</html>";
+    AgentToolDecision folderCall = ConfigurableCloudAgent.ParseAgentToolResponse(
+        ToolEnvelope("create_folder", new { path = fileTestFolder, label = "创建文件夹" }), true);
+    AgentToolDecision fileCall = ConfigurableCloudAgent.ParseAgentToolResponse(
+        ToolEnvelope("create_text_file", new { path = fileTestHtml, content = html,
+            label = "创建 HTML" }), true);
+    AgentToolDecision browserCall = ConfigurableCloudAgent.ParseAgentToolResponse(
+        ToolEnvelope("open_created_file", new { path = fileTestHtml,
+            app = "chrome", label = "在浏览器打开" }), true);
+    Check(folderCall.Kind == AgentToolKind.CreateFolder &&
+        fileCall.Kind == AgentToolKind.CreateTextFile &&
+        browserCall.Kind == AgentToolKind.OpenCreatedFile &&
+        AgentFileTool.TryCreateFolder(fileTestFolder, out _, out _) &&
+        AgentFileTool.TryCreateTextFile(fileTestHtml, html, out _, out _) &&
+        File.ReadAllText(fileTestHtml) == html,
+        "8g3d2 agent can create folder and multiline HTML without GUI shortcut guessing");
+    Check(!AgentFileTool.TryCreateTextFile(fileTestHtml, "changed", out _, out _) &&
+        File.ReadAllText(fileTestHtml) == html &&
+        !AgentFileTool.TryOpenCreated(fileTestHtml, "chrome",
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase), out _) &&
+        !AgentFileTool.TryNormalize(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows), "agent.html"),
+            out _, out _),
+        "8g3d3 existing files, untracked paths and system folders stay protected");
+}
+finally
+{
+    if (File.Exists(fileTestHtml)) File.Delete(fileTestHtml);
+    if (Directory.Exists(fileTestFolder)) Directory.Delete(fileTestFolder);
+}
 var trimmedConversation = new AgentConversation(quickMode: true);
 AgentToolDecision syntheticClick = ConfigurableCloudAgent.ParseAgentToolResponse(
     ToolEnvelope("click", new { x = 120, y = 140, label = "测试" }), true);
@@ -662,8 +717,16 @@ if (args.Contains("--quick-agent-tool-smoke"))
 }
 
 if (args.Contains("--live-quick-agent") || args.Contains("--live-desktop-agent") ||
-    args.Contains("--live-text-agent"))
+    args.Contains("--live-text-agent") || args.Contains("--live-file-agent") ||
+    args.Contains("--live-vscode-file-agent") || args.Contains("--live-explorer-file-agent"))
 {
+    bool fileFlow = args.Contains("--live-file-agent") ||
+        args.Contains("--live-vscode-file-agent") ||
+        args.Contains("--live-explorer-file-agent");
+    string testMarker = Guid.NewGuid().ToString("N")[..8];
+    string testFolder = Path.Combine(Path.GetTempPath(),
+        "LDD-Agent-E2E-" + Guid.NewGuid().ToString("N"));
+    string testHtml = Path.Combine(testFolder, "index.html");
     if (args.Contains("--live-text-agent"))
     {
         using Process? notepad = Process.Start("notepad.exe");
@@ -692,7 +755,13 @@ if (args.Contains("--live-quick-agent") || args.Contains("--live-desktop-agent")
     {
         if (entry.Module == "agent") Console.WriteLine($"LIVE_AGENT {entry.Event}: {entry.Summary}");
     };
-    string liveGoal = args.Contains("--live-text-agent")
+    string liveGoal = args.Contains("--live-vscode-file-agent")
+        ? $"打开 VS Code，在 {testFolder} 创建文件夹和 index.html，写一个完整 HTML 页面，标题为 LDD Agent E2E {testMarker}，正文显示测试完成 {testMarker}。先在 VS Code 中打开这个文件，再用 Chrome 打开本地 HTML 并确认显示。不要改动其他文件。"
+        : args.Contains("--live-explorer-file-agent")
+        ? $"打开 Windows 文件资源管理器，在 {testFolder} 创建文件夹和 index.html，写一个完整 HTML 页面，标题为 LDD Agent E2E {testMarker}，正文显示测试完成 {testMarker}。先在资源管理器中显示新文件，再用 Chrome 打开本地 HTML 并确认显示。不要改动其他文件。"
+        : args.Contains("--live-file-agent")
+        ? $"在 {testFolder} 创建文件夹和 index.html，写一个完整 HTML 页面，标题为 LDD Agent E2E {testMarker}，正文显示测试完成 {testMarker}。用 Chrome 打开本地 HTML 并确认显示。不要改动其他文件。"
+        : args.Contains("--live-text-agent")
         ? "在当前记事本的空白文档里输入“灵动岛测试”，不要保存文件，看到文字后结束"
         : args.Contains("--live-desktop-agent")
         ? "打开 Windows 资源管理器，并确认资源管理器窗口已显示"
@@ -701,10 +770,20 @@ if (args.Contains("--live-quick-agent") || args.Contains("--live-desktop-agent")
         out string startMessage, quickMode: true);
     Console.WriteLine("LIVE_AGENT_START " + startMessage);
     Check(started, "11d live quick agent starts with saved cloud consent");
-    AgentLoopOutcome result = await completed.Task.WaitAsync(TimeSpan.FromMinutes(3));
+    AgentLoopOutcome result = await completed.Task.WaitAsync(TimeSpan.FromMinutes(fileFlow ? 8 : 3));
     Console.WriteLine($"LIVE_AGENT_RESULT success={result.Success} actions={result.Actions} " +
                       $"calls={result.CloudCalls} status={result.Status} detail={result.Summary}");
     Check(result.Success, "11e live quick agent completes the requested desktop task");
+    if (fileFlow)
+    {
+        Check(File.Exists(testHtml) &&
+            File.ReadAllText(testHtml).Contains("测试完成 " + testMarker) &&
+            File.ReadAllText(testHtml).Contains("LDD Agent E2E " + testMarker),
+            "11f live agent created the expected HTML content on disk");
+        using var finalActivity = new WindowsActivity();
+        Console.WriteLine($"LIVE_FILE path={testHtml} bytes={new FileInfo(testHtml).Length} " +
+            $"foreground={finalActivity.Foreground()?.ProcessName}");
+    }
 }
 
 if (args.Contains("--settings-smoke"))
@@ -996,6 +1075,20 @@ sealed class FakeWakeEnvironment(AgentLoopFrame frame, AgentToolDecision decisio
         Task.FromResult(new AgentActionFeedback(action, true, "已设置唤醒"));
 }
 
+sealed class RejectedThenFinishEnvironment(AgentLoopFrame frame, AgentToolDecision rejected)
+    : IAgentLoopEnvironment
+{
+    public Task<AgentLoopFrame> CaptureAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(frame);
+    public Task<AgentToolDecision> DecideAsync(AgentLoopFrame current,
+        IReadOnlyList<AgentActionFeedback> history, CancellationToken cancellationToken) =>
+        Task.FromResult(history.Count == 0 ? rejected : new AgentToolDecision(
+            "done", AgentToolKind.Finish, 0, 0, "完成", true, "已改用支持的工具", "{}"));
+    public Task<AgentActionFeedback> ExecuteAsync(AgentLoopFrame current,
+        AgentToolDecision action, CancellationToken cancellationToken) =>
+        Task.FromResult(new AgentActionFeedback(action, false, "快捷键不支持，改用文件工具"));
+}
+
 sealed class MockAgentToolHandler : HttpMessageHandler
 {
     private int _calls;
@@ -1036,9 +1129,9 @@ sealed class MockQuickAgentToolHandler : HttpMessageHandler
         using JsonDocument body = JsonDocument.Parse(await request.Content!
             .ReadAsStringAsync(cancellationToken));
         JsonElement root = body.RootElement;
-        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 14 &&
+        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 17 &&
             root.GetProperty("tools").EnumerateArray().Any(item =>
-                item.GetProperty("function").GetProperty("name").GetString() == "schedule_wake");
+                item.GetProperty("function").GetProperty("name").GetString() == "create_text_file");
         JsonElement messages = root.GetProperty("messages");
         int call = ++_calls;
         if (call == 3)

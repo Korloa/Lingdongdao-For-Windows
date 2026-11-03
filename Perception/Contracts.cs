@@ -74,7 +74,7 @@ public sealed class PerceptionOptions
     public double EstimatedCostPerCallUsd { get; set; } = 0.02;
     public int CooldownSeconds { get; set; } = 300;
     public int AgentMaxActions { get; set; } = 8;
-    public int QuickAgentMaxActions { get; set; } = 12;
+    public int QuickAgentMaxActions { get; set; } = 24;
     public double AgentCursorSize { get; set; } = 40;
     public double AgentCursorGlowRadius { get; set; } = 22;
     public double AgentCursorGlowOpacity { get; set; } = 0.95;
@@ -107,7 +107,7 @@ public sealed class PerceptionOptions
         EstimatedCostPerCallUsd = Math.Clamp(EstimatedCostPerCallUsd, 0.001, 10);
         CooldownSeconds = Math.Clamp(CooldownSeconds, 0, 86400);
         AgentMaxActions = Math.Clamp(AgentMaxActions, 1, 20);
-        QuickAgentMaxActions = Math.Clamp(QuickAgentMaxActions, 1, 20);
+        QuickAgentMaxActions = Math.Clamp(QuickAgentMaxActions, 1, 40);
         AgentCursorSize = Math.Clamp(AgentCursorSize, 20, 80);
         AgentCursorGlowRadius = Math.Clamp(AgentCursorGlowRadius, 0, 50);
         AgentCursorGlowOpacity = Math.Clamp(AgentCursorGlowOpacity, 0, 1);

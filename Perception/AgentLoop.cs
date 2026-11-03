@@ -2,7 +2,8 @@ namespace LingDongDao.Perception;
 
 public enum AgentToolKind
 { Click, RightClick, Finish, OpenBrowser, Navigate, DoubleClick, Scroll, TypeText, PressKeys, Wait, Drag,
-  OpenApp, ActivateWindow, ScheduleWake }
+  OpenApp, ActivateWindow, ScheduleWake, CreateFolder, CreateTextFile,
+  OpenCreatedFile, Rejected }
 
 public sealed record AgentToolDecision(string CallId, AgentToolKind Kind, int X, int Y,
     string Label, bool Success, string Summary, string RawResponse, string? Value = null,
@@ -36,7 +37,7 @@ public sealed class AgentLoopEngine
         int maxActions, Action<string>? status, CancellationToken cancellationToken,
         Action<IReadOnlyList<AgentActionFeedback>>? completed = null)
     {
-        if (maxActions is < 1 or > 20) throw new ArgumentOutOfRangeException(nameof(maxActions));
+        if (maxActions is < 1 or > 40) throw new ArgumentOutOfRangeException(nameof(maxActions));
         var history = new List<AgentActionFeedback>();
         for (int round = 0; round <= maxActions; round++)
         {
@@ -56,7 +57,9 @@ public sealed class AgentLoopEngine
                     "达到操作步数上限", "最后一次截图已交给云端判断，但任务仍未完成");
             status?.Invoke(decision.Kind is AgentToolKind.OpenBrowser or AgentToolKind.OpenApp or
                 AgentToolKind.ActivateWindow or AgentToolKind.TypeText or
-                AgentToolKind.PressKeys or AgentToolKind.Wait
+                AgentToolKind.PressKeys or AgentToolKind.Wait or AgentToolKind.CreateFolder or
+                AgentToolKind.CreateTextFile or AgentToolKind.OpenCreatedFile or
+                AgentToolKind.Rejected
                 ? $"第 {round + 1} 步：{decision.Label}"
                 : $"第 {round + 1} 步：{decision.Label} ({decision.X}, {decision.Y})");
             AgentActionFeedback feedback = await environment.ExecuteAsync(frame, decision,

@@ -42,7 +42,7 @@ public sealed partial class PerceptionService
         if (_gate.EstimatedSpentToday + options.EstimatedCostPerCallUsd > options.DailyCloudBudgetUsd)
         { message = "今日云端预算不足，请在控制面板调整预算"; return false; }
         _agentStop?.Dispose();
-        _agentStop = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        _agentStop = new CancellationTokenSource(TimeSpan.FromMinutes(quickMode ? 12 : 5));
         _agentActions = 0;
         _agentCalls = 0;
         ReportAgent("正在启动");
@@ -98,7 +98,8 @@ public sealed partial class PerceptionService
                 });
         }
         catch (OperationCanceledException)
-        { outcome = new(false, _agentActions, _agentCalls, "已停止", "用户停止或运行超过 5 分钟"); }
+        { outcome = new(false, _agentActions, _agentCalls, "已停止",
+            quickMode ? "用户停止或运行超过 12 分钟" : "用户停止或运行超过 5 分钟"); }
         catch (Exception exception)
         {
             Log("warn", "agent", "stopped", exception.GetType().Name + ": " + exception.Message);
@@ -130,6 +131,10 @@ public sealed partial class PerceptionService
         private int _round;
         private string? _expectedProcessName;
         private HashSet<nint> _browserWindowsBeforeLaunch = [];
+        private readonly HashSet<string> _createdPaths = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _openedBrowserPaths = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _openedVsCodePaths = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _openedExplorerPaths = new(StringComparer.OrdinalIgnoreCase);
         private bool _typedInMessageApp;
 
         public LiveAgentEnvironment(PerceptionService service, string goal, bool quickMode,
@@ -154,9 +159,8 @@ public sealed partial class PerceptionService
                     await Task.Delay(250, cancellationToken);
                     window = activity.Foreground();
                 }
-                if (!string.Equals(window?.ProcessName, expected, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("浏览器没有切换到前台，Agent 已停止");
-                _processId = window!.ProcessId;
+                if (string.Equals(window?.ProcessName, expected, StringComparison.OrdinalIgnoreCase))
+                    _processId = window!.ProcessId;
                 _expectedProcessName = null;
             }
             if (window is null || window.ProcessId == Environment.ProcessId)
@@ -237,9 +241,42 @@ public sealed partial class PerceptionService
             {
                 AgentToolDecision decision = await _service._cloud.NextAgentToolAsync(
                     _conversation, frame, _goal, history, cancellationToken, _quickMode);
-                record = record with { Status = decision.Kind == AgentToolKind.Finish
-                    ? "agent_finished" : "agent_action", Reason = decision.Kind == AgentToolKind.Finish
-                    ? decision.Summary : decision.Label, RawResponse = decision.RawResponse,
+                if (_quickMode && decision.Kind == AgentToolKind.Finish && decision.Success &&
+                    AgentTaskPermissions.MayCreateFiles(_goal))
+                {
+                    bool createdHtml = _createdPaths.Any(path =>
+                        Path.GetExtension(path).ToLowerInvariant() is ".html" or ".htm");
+                    IReadOnlySet<string> requestedNames = AgentTaskPermissions.RequestedHtmlFileNames(_goal);
+                    bool openedThisRun = _openedBrowserPaths.Any(path => _createdPaths.Contains(path) &&
+                        (requestedNames.Count == 0 || requestedNames.Contains(Path.GetFileName(path))));
+                    bool browserVisible = frame.Window.ProcessName.Equals("chrome",
+                        StringComparison.OrdinalIgnoreCase) ||
+                        frame.Window.ProcessName.Equals("msedge", StringComparison.OrdinalIgnoreCase);
+                    bool browserRequired = AgentTaskPermissions.RequiresBrowserPreview(_goal);
+                    bool vsCodeRequired = AgentTaskPermissions.RequiresVsCodeFile(_goal);
+                    bool explorerRequired = AgentTaskPermissions.RequiresExplorerFile(_goal);
+                    if (browserRequired && (!createdHtml || !openedThisRun || !browserVisible) ||
+                        vsCodeRequired && !_openedVsCodePaths.Any(path => _createdPaths.Contains(path)) ||
+                        explorerRequired && !_openedExplorerPaths.Any(path => _createdPaths.Contains(path)))
+                        decision = decision with { Kind = AgentToolKind.Rejected,
+                            Value = browserRequired && !createdHtml ? "本轮尚未创建 HTML 文件" :
+                                browserRequired && !openedThisRun ? "本轮新建的 HTML 尚未通过 open_created_file 在浏览器中打开" :
+                                browserRequired && !browserVisible ? "浏览器尚未显示在前台，无法确认新建 HTML 页面" :
+                                vsCodeRequired && !_openedVsCodePaths.Any() ?
+                                    "请用 open_created_file(app=vscode) 打开本轮新建的文件" :
+                                    "请用 open_created_file(app=explorer) 在文件管理器中展示本轮结果" };
+                }
+                record = record with { Status = decision.Kind switch
+                    {
+                        AgentToolKind.Finish => "agent_finished",
+                        AgentToolKind.Rejected => "agent_rejected",
+                        _ => "agent_action"
+                    }, Reason = decision.Kind switch
+                    {
+                        AgentToolKind.Finish => decision.Summary,
+                        AgentToolKind.Rejected => decision.Value ?? "参数不支持",
+                        _ => decision.Label
+                    }, RawResponse = decision.RawResponse,
                     ShouldIntervene = decision.Kind != AgentToolKind.Finish || decision.Success };
                 _service._gate.MarkDecision(reservedAt, frame.Package.Assessment.EventKey, true);
                 _service._history.Save(record);
@@ -258,6 +295,85 @@ public sealed partial class PerceptionService
         public async Task<AgentActionFeedback> ExecuteAsync(AgentLoopFrame frame,
             AgentToolDecision decision, CancellationToken cancellationToken)
         {
+            if (decision.Kind == AgentToolKind.Rejected)
+            {
+                var rejected = new AgentActionFeedback(decision, false,
+                    $"未执行：{decision.Value}。请改用已列出的快捷键或文件工具，勿重复相同参数");
+                _conversation.AddToolResult(decision, rejected);
+                return rejected;
+            }
+            if (_quickMode && decision.Kind is AgentToolKind.CreateFolder or
+                AgentToolKind.CreateTextFile or AgentToolKind.OpenCreatedFile)
+            {
+                AgentFileRequest request = System.Text.Json.JsonSerializer
+                    .Deserialize<AgentFileRequest>(decision.Value ?? "{}")!;
+                bool permitted = AgentTaskPermissions.MayCreateFiles(_goal);
+                bool done = false;
+                string detail;
+                if (!permitted) detail = "任务未明确要求创建文件或文件夹";
+                else
+                {
+                    IReadOnlySet<string> requestedNames = AgentTaskPermissions.RequestedHtmlFileNames(_goal);
+                    if (decision.Kind == AgentToolKind.CreateTextFile &&
+                        (Path.GetExtension(request.Path).ToLowerInvariant() is ".html" or ".htm") &&
+                        requestedNames.Count > 0 && !requestedNames.Contains(Path.GetFileName(request.Path)))
+                    {
+                        detail = "请使用用户指定的 HTML 文件名：" + string.Join("、", requestedNames);
+                        var mismatch = new AgentActionFeedback(decision, false, detail);
+                        _conversation.AddToolResult(decision, mismatch);
+                        return mismatch;
+                    }
+                    if (decision.Kind == AgentToolKind.OpenCreatedFile &&
+                        request.App is "chrome" or "edge")
+                        _browserWindowsBeforeLaunch = AgentBrowserTool.SnapshotWindows(request.App);
+                    done = decision.Kind switch
+                    {
+                        AgentToolKind.CreateFolder => AgentFileTool.TryCreateFolder(
+                            request.Path, out _, out detail),
+                        AgentToolKind.CreateTextFile => AgentFileTool.TryCreateTextFile(
+                            request.Path, request.Content ?? "", out _, out detail),
+                        _ => AgentFileTool.TryOpenCreated(request.Path, request.App ?? "",
+                            _createdPaths, out detail)
+                    };
+                    if (done && decision.Kind is AgentToolKind.CreateFolder or
+                        AgentToolKind.CreateTextFile)
+                        _createdPaths.Add(request.Path);
+                    if (done && decision.Kind == AgentToolKind.OpenCreatedFile &&
+                        request.App is "chrome" or "edge")
+                    {
+                        _openedBrowserPaths.Add(request.Path);
+                        _expectedProcessName = request.App == "edge" ? "msedge" : "chrome";
+                    }
+                    if (done && decision.Kind == AgentToolKind.OpenCreatedFile &&
+                        request.App == "vscode") _openedVsCodePaths.Add(request.Path);
+                    if (done && decision.Kind == AgentToolKind.OpenCreatedFile &&
+                        request.App == "explorer")
+                    {
+                        _openedExplorerPaths.Add(request.Path);
+                        string folderName = Path.GetFileName(Directory.Exists(request.Path) ?
+                            request.Path : Path.GetDirectoryName(request.Path)!);
+                        for (int attempt = 0; attempt < 6; attempt++)
+                        {
+                            WindowInfo? explorerWindow = DesktopWindowInventory.VisibleWindows()
+                                .FirstOrDefault(window => window.ProcessName.Equals("explorer",
+                                    StringComparison.OrdinalIgnoreCase) &&
+                                    window.Title.Contains(folderName, StringComparison.OrdinalIgnoreCase));
+                            if (explorerWindow is not null && DesktopWindowTool.Activate(explorerWindow))
+                            {
+                                detail += "；资源管理器窗口已置前";
+                                break;
+                            }
+                            await Task.Delay(250, cancellationToken);
+                        }
+                    }
+                }
+                if (done) _service._agentActions++;
+                var result = new AgentActionFeedback(decision, done, detail);
+                _conversation.AddToolResult(decision, result);
+                if (done) await Task.Delay(Math.Max(250,
+                    _service._options().AgentActionPauseMs), cancellationToken);
+                return result;
+            }
             if (_quickMode && decision.Kind == AgentToolKind.ScheduleWake)
             {
                 string[] parts = (decision.Value ?? "").Split('|', 2);

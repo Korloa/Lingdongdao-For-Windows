@@ -20,6 +20,16 @@ public sealed class AgentConversation
               "Use mouse, keyboard, scroll, drag, wait, and browser tools as needed. A window may change after each action. " +
               "Prefer open_app for installed programs and activate_window for an already visible window. " +
               "Use WIN, type_text, and ENTER for apps not found by open_app. " +
+              "For a requested folder or source file, prefer create_folder and create_text_file with an absolute path. " +
+              "Create the parent folder BEFORE create_text_file. If the user named index.html or another filename, keep that exact filename. " +
+              "Use open_created_file to show a file you created in VS Code, Chrome, Edge, or Explorer; do not use navigate for file:// URLs. " +
+              "VS Code app names include 'VS Code' and 'Visual Studio Code'. " +
+              "If the user asked to work in VS Code, open VS Code first, create_text_file, then open_created_file with app=vscode before opening the HTML in a browser. " +
+              "If the user asked to work in File Explorer, create the file/folder then use open_created_file with app=explorer so the result is visible there. " +
+              "For an HTML browser task, finish(success=true) only after open_created_file with app=chrome or edge succeeded for the NEW file, and a fresh screenshot confirms it. " +
+              "Do not create the same file twice after a prior create_text_file success; use its existing path with open_created_file. " +
+              "For GUI-only creation, Ctrl+N, Ctrl+Shift+S and Ctrl+Shift+N are supported; type_text accepts multiline code. " +
+              "If no destination was specified, use the user's Desktop folder and say where you saved the result. " +
               "Only send messages or submit forms when the user's task explicitly asks you to do so. " +
               "For a delay longer than 5 seconds, use schedule_wake once and end this run; the app will resume you at the due time with a fresh screenshot. "
             : "You operate one Windows application. Call only click, right_click, or finish. ";
@@ -46,6 +56,7 @@ public sealed class AgentConversation
             "可见窗口：" + JsonSerializer.Serialize(frame.VisibleWindows.Take(25).Select(item => new
             { item.Handle, item.ProcessName, item.Title, item.Bounds })) + "\n";
         string prompt = $"用户任务：{goal}\n" +
+            (_quickMode ? $"可用文件位置：{AgentFileTool.WorkspaceHints()}\n" : "") +
             (string.IsNullOrEmpty(_context) ? "" : $"已验证的本地经验或唤醒上下文：{_context}\n经验仅供参考，实际操作前仍需查看当前截图。\n") +
             $"当前窗口：{frame.Window.ProcessName} / {frame.Window.Title}\n" +
             windows +
@@ -139,12 +150,12 @@ public sealed partial class ConfigurableCloudAgent
               required = new[] { "x", "y", "target_x", "target_y", "label" },
               additionalProperties = false } } },
         new { type = "function", function = new { name = "type_text",
-            description = "Type Unicode text into the currently focused desktop control. Use only after focusing and checking the target. Never type passwords or secrets.",
+            description = "Type Unicode text, including CR/LF and tabs, into the focused desktop control. For a new code file prefer create_text_file. Never type passwords or secrets.",
             parameters = new { type = "object", properties = new
             { text = new { type = "string" }, label = new { type = "string" } },
               required = new[] { "text", "label" }, additionalProperties = false } } },
         new { type = "function", function = new { name = "press_keys",
-            description = "Press one approved Windows key or shortcut. Examples WIN, ENTER, ESC, TAB, ALT+TAB, CTRL+A, CTRL+L, WIN+E.",
+            description = "Press one shortcut from: WIN, WIN+E, WIN+D, ENTER, ESC, TAB, SHIFT+TAB, ALT+TAB, ALT+F4, ALT+D, ALT+LEFT, ALT+RIGHT, CTRL+A/L/C/V/S/Z/F/W/N/O/P/T/TAB/ENTER, CTRL+SHIFT+S/N/P, BACKSPACE, DELETE, arrows, SPACE, F2, F5. Do not invent shortcuts.",
             parameters = new { type = "object", properties = new
             { keys = new { type = "string" }, label = new { type = "string" } },
               required = new[] { "keys", "label" }, additionalProperties = false } } },
@@ -169,7 +180,27 @@ public sealed partial class ConfigurableCloudAgent
             { seconds = new { type = "integer" },
               context = new { type = "string", description = "What to inspect when the timer fires, max 400 chars. Never include secrets." },
               label = new { type = "string" } },
-              required = new[] { "seconds", "context", "label" }, additionalProperties = false } } }
+              required = new[] { "seconds", "context", "label" }, additionalProperties = false } } },
+        new { type = "function", function = new { name = "create_folder",
+            description = "Create a new folder at an absolute Windows path, only when the user requested file creation. Never modifies an existing folder. Use Desktop if the location is unspecified.",
+            parameters = new { type = "object", properties = new
+            { path = new { type = "string" }, label = new { type = "string" } },
+              required = new[] { "path", "label" }, additionalProperties = false } } },
+        new { type = "function", function = new { name = "create_text_file",
+            description = "Create a NEW UTF-8 .html/.htm/.css/.js/.json/.txt/.md file with complete content at an absolute Windows path. Parent folder must exist. Existing files are never overwritten. Prefer this for HTML/CSS/JS code over typing in an editor.",
+            parameters = new { type = "object", properties = new
+            { path = new { type = "string" }, content = new { type = "string" },
+              label = new { type = "string" } },
+              required = new[] { "path", "content", "label" },
+              additionalProperties = false } } },
+        new { type = "function", function = new { name = "open_created_file",
+            description = "Open a file or folder created earlier in THIS agent run. Use vscode for source preview, chrome/edge for local HTML, explorer to show a folder/file. This cannot open arbitrary preexisting paths.",
+            parameters = new { type = "object", properties = new
+            { path = new { type = "string" },
+              app = new { type = "string", @enum = new[] { "vscode", "chrome", "edge", "explorer" } },
+              label = new { type = "string" } },
+              required = new[] { "path", "app", "label" },
+              additionalProperties = false } } }
     ];
 
     public async Task<AgentToolDecision> NextAgentToolAsync(AgentConversation conversation,
@@ -184,7 +215,7 @@ public sealed partial class ConfigurableCloudAgent
         {
             ["model"] = _model!, ["messages"] = conversation.Messages,
             ["tools"] = quickMode ? QuickAgentTools : AgentTools,
-            ["tool_choice"] = "required", ["max_tokens"] = quickMode ? 1200 : 450
+            ["tool_choice"] = "required", ["max_tokens"] = quickMode ? 4096 : 450
         };
         if (Uri.TryCreate(_endpoint, UriKind.Absolute, out Uri? uri) &&
             uri.Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase))
@@ -209,9 +240,11 @@ public sealed partial class ConfigurableCloudAgent
         string name = call.GetProperty("function").GetProperty("name").GetString() ?? "";
         string arguments = call.GetProperty("function").GetProperty("arguments").GetString() ?? "";
         if (string.IsNullOrWhiteSpace(id)) throw new InvalidDataException("Tool call ID is missing");
+        string raw = message.GetRawText();
+        try
+        {
         using JsonDocument parsed = JsonDocument.Parse(arguments);
         JsonElement input = parsed.RootElement;
-        string raw = message.GetRawText();
         if (!quickMode && name is not ("click" or "right_click" or "finish"))
             throw new InvalidDataException("Tool is unavailable in the single-window agent");
         if (name == "finish")
@@ -259,9 +292,12 @@ public sealed partial class ConfigurableCloudAgent
         }
         if (name is "open_app" or "activate_window")
         {
+            JsonElement handleInput = name == "activate_window" ?
+                input.GetProperty("handle") : default;
             string value = name == "open_app" ?
                 (input.GetProperty("name").GetString() ?? "").Trim() :
-                input.GetProperty("handle").GetInt64().ToString();
+                handleInput.ValueKind == JsonValueKind.String ?
+                    handleInput.GetString() ?? "" : handleInput.GetInt64().ToString();
             if (name == "open_app" && (value.Length is < 2 or > 80 ||
                 value.Any(char.IsControl)))
                 throw new InvalidDataException("Invalid app name");
@@ -272,6 +308,32 @@ public sealed partial class ConfigurableCloudAgent
             if (caption.Length > 48) caption = caption[..48];
             return new AgentToolDecision(id, name == "open_app" ? AgentToolKind.OpenApp :
                 AgentToolKind.ActivateWindow, 0, 0, caption, false, "", raw, value);
+        }
+        if (name is "create_folder" or "create_text_file" or "open_created_file")
+        {
+            string path = (input.GetProperty("path").GetString() ?? "").Trim();
+            if (!AgentFileTool.TryNormalize(path, out string fullPath, out string error))
+                throw new InvalidDataException(error);
+            string? content = name == "create_text_file" ?
+                input.GetProperty("content").GetString() : null;
+            string? app = name == "open_created_file" ?
+                (input.GetProperty("app").GetString() ?? "").Trim().ToLowerInvariant() : null;
+            if (name == "create_text_file" &&
+                (content is null || content.Length is < 1 or > 20000))
+                throw new InvalidDataException("Invalid file content length");
+            if (name == "open_created_file" &&
+                app is not ("vscode" or "chrome" or "edge" or "explorer"))
+                throw new InvalidDataException("Unsupported file application");
+            AgentToolKind fileKind = name switch
+            {
+                "create_folder" => AgentToolKind.CreateFolder,
+                "create_text_file" => AgentToolKind.CreateTextFile,
+                _ => AgentToolKind.OpenCreatedFile
+            };
+            string caption = (input.GetProperty("label").GetString() ?? name).Trim();
+            if (caption.Length > 48) caption = caption[..48];
+            return new AgentToolDecision(id, fileKind, 0, 0, caption, false, "", raw,
+                JsonSerializer.Serialize(new AgentFileRequest(fullPath, content, app)));
         }
         if (name is "type_text" or "press_keys" or "wait")
         {
@@ -284,8 +346,9 @@ public sealed partial class ConfigurableCloudAgent
                 "press_keys" => input.GetProperty("keys").GetString() ?? "",
                 _ => input.GetProperty("milliseconds").GetInt32().ToString()
             };
-            if (name == "type_text" && (value.Length is < 1 or > 1000 ||
-                value.Any(character => char.IsControl(character))))
+            if (name == "type_text" && (value.Length is < 1 or > 20000 ||
+                value.Any(character => char.IsControl(character) &&
+                    character is not ('\r' or '\n' or '\t'))))
                 throw new InvalidDataException("Invalid text length or control character");
             if (name == "press_keys" && !AgentKeyboardTool.IsApprovedShortcut(value))
                 throw new InvalidDataException("Unsupported keyboard shortcut");
@@ -325,5 +388,14 @@ public sealed partial class ConfigurableCloudAgent
         }
         return new AgentToolDecision(id, kind, x, y, label, false, "", raw,
             valueForAction, targetX, targetY);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or KeyNotFoundException or
+            InvalidOperationException or FormatException or ArgumentOutOfRangeException or JsonException)
+        {
+            string detail = exception is InvalidDataException ? exception.Message :
+                "Tool arguments are missing or invalid";
+            return new AgentToolDecision(id, AgentToolKind.Rejected, 0, 0,
+                "工具参数不支持", false, "", raw, detail);
+        }
     }
 }

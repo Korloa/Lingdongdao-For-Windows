@@ -12,8 +12,11 @@ internal static class AgentKeyboardTool
     {
         "WIN", "WIN+E", "WIN+D", "ENTER", "ESC", "TAB", "SHIFT+TAB",
         "ALT+TAB", "ALT+F4", "CTRL+A", "CTRL+L", "CTRL+C", "CTRL+V",
-        "CTRL+S", "CTRL+Z", "CTRL+F", "CTRL+W", "CTRL+ENTER",
-        "BACKSPACE", "DELETE", "UP", "DOWN", "LEFT", "RIGHT", "SPACE", "F2"
+        "CTRL+S", "CTRL+SHIFT+S", "CTRL+Z", "CTRL+F", "CTRL+W", "CTRL+ENTER",
+        "CTRL+N", "CTRL+SHIFT+N", "CTRL+O", "CTRL+P", "CTRL+SHIFT+P",
+        "CTRL+T", "CTRL+TAB", "ALT+D", "ALT+LEFT", "ALT+RIGHT",
+        "BACKSPACE", "DELETE", "UP", "DOWN", "LEFT", "RIGHT", "SPACE",
+        "F2", "F5"
     };
     private static readonly Dictionary<string, ushort> VirtualKeys = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -22,7 +25,8 @@ internal static class AgentKeyboardTool
         ["TAB"] = 0x09, ["E"] = 0x45, ["D"] = 0x44,
         ["A"] = 0x41, ["L"] = L, ["C"] = 0x43, ["V"] = 0x56,
         ["S"] = 0x53, ["Z"] = 0x5A, ["F"] = 0x46, ["W"] = 0x57,
-        ["F4"] = 0x73, ["F2"] = 0x71, ["BACKSPACE"] = 0x08,
+        ["N"] = 0x4E, ["O"] = 0x4F, ["P"] = 0x50, ["T"] = 0x54,
+        ["F4"] = 0x73, ["F2"] = 0x71, ["F5"] = 0x74, ["BACKSPACE"] = 0x08,
         ["DELETE"] = 0x2E, ["UP"] = 0x26, ["DOWN"] = 0x28,
         ["LEFT"] = 0x25, ["RIGHT"] = 0x27, ["SPACE"] = 0x20
     };
@@ -46,17 +50,27 @@ internal static class AgentKeyboardTool
         return false;
     }
 
-    public static bool TypeText(string text) => text.Length is >= 1 and <= 1000 &&
+    public static bool TypeText(string text) => text.Length is >= 1 and <= 20000 &&
         !text.Any(char.IsControl) && TypeUnicode(text);
 
     public static async Task<bool> TypeTextAsync(string text, int intervalMs,
         CancellationToken cancellationToken)
     {
-        if (text.Length is < 1 or > 1000 || text.Any(char.IsControl)) return false;
-        foreach (char character in text)
+        if (text.Length is < 1 or > 20000 || text.Any(character =>
+            char.IsControl(character) && character is not ('\r' or '\n' or '\t'))) return false;
+        for (int index = 0; index < text.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TypeUnicode(character.ToString())) return false;
+            char character = text[index];
+            bool sent = character switch
+            {
+                '\r' => Press(Enter),
+                '\n' when index > 0 && text[index - 1] == '\r' => true,
+                '\n' => Press(Enter),
+                '\t' => Press(0x09),
+                _ => TypeUnicode(character.ToString())
+            };
+            if (!sent) return false;
             if (intervalMs > 0) await Task.Delay(intervalMs, cancellationToken);
         }
         return true;

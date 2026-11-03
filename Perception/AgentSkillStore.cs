@@ -68,9 +68,12 @@ public sealed class AgentSkillStore
         if (value is { Length: > 100 }) value = value[..100];
         // Labels can reflect private message contents; keep only the tool kind for those actions.
         string label = decision.Kind is AgentToolKind.TypeText or AgentToolKind.Click or
-            AgentToolKind.RightClick or AgentToolKind.DoubleClick or AgentToolKind.Drag
+            AgentToolKind.RightClick or AgentToolKind.DoubleClick or AgentToolKind.Drag or
+            AgentToolKind.CreateFolder or AgentToolKind.CreateTextFile or
+            AgentToolKind.OpenCreatedFile
             ? decision.Kind.ToString() : decision.Label[..Math.Min(48, decision.Label.Length)];
-        return decision.Kind is AgentToolKind.Wait or AgentToolKind.Finish or AgentToolKind.ScheduleWake
+        return decision.Kind is AgentToolKind.Wait or AgentToolKind.Finish or
+            AgentToolKind.ScheduleWake or AgentToolKind.Rejected
             ? null : new AgentSkillStep(decision.Kind.ToString(), label, value);
     }
 

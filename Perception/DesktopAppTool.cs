@@ -19,6 +19,8 @@ public static class DesktopAppTool
             "chrome" or "google chrome" or "谷歌浏览器" =>
                 AgentBrowserTool.FindExecutable("chrome"),
             "edge" or "microsoft edge" => AgentBrowserTool.FindExecutable("edge"),
+            "vs code" or "vscode" or "visual studio code" or "code" or "代码编辑器" =>
+                FindCodeExecutable() ?? FindStartMenuShortcut("Visual Studio Code"),
             _ => FindStartMenuShortcut(requested)
         };
         if (executable is null || !File.Exists(executable))
@@ -33,6 +35,34 @@ public static class DesktopAppTool
         catch (Exception exception) when (exception is IOException or InvalidOperationException or
                                            System.ComponentModel.Win32Exception)
         { reason = "应用启动失败：" + exception.GetType().Name; return false; }
+    }
+
+    public static string? FindCodeExecutable()
+    {
+        string[] candidates =
+        [
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs", "Microsoft VS Code", "Code.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "Microsoft VS Code", "Code.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "Microsoft VS Code", "Code.exe")
+        ];
+        string? installed = candidates.FirstOrDefault(File.Exists);
+        if (installed is not null) return installed;
+        foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                if (!File.Exists(Path.Combine(folder, "code.cmd"))) continue;
+                string candidate = Path.GetFullPath(Path.Combine(folder, "..", "Code.exe"));
+                if (File.Exists(candidate)) return candidate;
+            }
+            catch (Exception exception) when (exception is IOException or ArgumentException or
+                UnauthorizedAccessException) { }
+        }
+        return null;
     }
 
     private static string? FindStartMenuShortcut(string name)
