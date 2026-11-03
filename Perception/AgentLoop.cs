@@ -1,9 +1,9 @@
 namespace LingDongDao.Perception;
 
-public enum AgentToolKind { Click, RightClick, Finish }
+public enum AgentToolKind { Click, RightClick, Finish, OpenBrowser, Navigate }
 
 public sealed record AgentToolDecision(string CallId, AgentToolKind Kind, int X, int Y,
-    string Label, bool Success, string Summary, string RawResponse);
+    string Label, bool Success, string Summary, string RawResponse, string? Value = null);
 
 public sealed record AgentLoopFrame(WindowInfo Window, PixelRect Bounds, byte[] Jpeg,
     CloudEventPackage Package, DesktopObservation Observation);
@@ -46,7 +46,9 @@ public sealed class AgentLoopEngine
             if (round == maxActions)
                 return new AgentLoopOutcome(false, history.Count, round + 1,
                     "达到操作步数上限", "最后一次截图已交给云端判断，但任务仍未完成");
-            status?.Invoke($"第 {round + 1} 步：{decision.Label} ({decision.X}, {decision.Y})");
+            status?.Invoke(decision.Kind == AgentToolKind.OpenBrowser
+                ? $"第 {round + 1} 步：{decision.Label}"
+                : $"第 {round + 1} 步：{decision.Label} ({decision.X}, {decision.Y})");
             AgentActionFeedback feedback = await environment.ExecuteAsync(frame, decision,
                 cancellationToken);
             history.Add(feedback);

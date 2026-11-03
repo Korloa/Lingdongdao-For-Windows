@@ -37,6 +37,7 @@ internal sealed class AppSettings
     public string ManualAnalysisHotkey { get; set; } = "Ctrl+Alt+J";
     public string AgentStartHotkey { get; set; } = "Ctrl+Alt+Shift+L";
     public string AgentStopHotkey { get; set; } = "Ctrl+Alt+Shift+X";
+    public string AgentCommandHotkey { get; set; } = "Ctrl+Alt+K";
     [JsonIgnore]
     public string AgentGoal { get; set; } = "";
     public bool StartWithWindows { get; set; }
@@ -122,6 +123,7 @@ internal sealed class AppSettings
         ManualAnalysisHotkey = GlobalHotkey.CanonicalOrDefault(ManualAnalysisHotkey, "Ctrl+Alt+J");
         AgentStartHotkey = GlobalHotkey.CanonicalOrDefault(AgentStartHotkey, "Ctrl+Alt+Shift+L");
         AgentStopHotkey = GlobalHotkey.CanonicalOrDefault(AgentStopHotkey, "Ctrl+Alt+Shift+X");
+        AgentCommandHotkey = GlobalHotkey.CanonicalOrDefault(AgentCommandHotkey, "Ctrl+Alt+K");
         AgentGoal = (AgentGoal ?? "").Trim();
         if (AgentGoal.Length > 300) AgentGoal = AgentGoal[..300];
     }

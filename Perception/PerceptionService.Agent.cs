@@ -11,19 +11,20 @@ public sealed partial class PerceptionService
 
     public event Action<AgentActionVisual>? AgentVisual;
     public event Action? AgentBeforeCapture;
+    public event Action? AgentAfterCapture;
     public event Action<AgentLoopOutcome>? AgentCompleted;
     public bool AgentRunning => _agentTask is { IsCompleted: false };
     public string AgentStatus => _agentStatus;
     public int AgentActions => _agentActions;
     public int AgentCalls => _agentCalls;
 
-    public bool TryStartAgent(string goal, out string message)
+    public bool TryStartAgent(string goal, out string message, bool quickMode = false)
     {
         goal = goal.Trim();
         if (_disposed) { message = "服务已关闭"; return false; }
         if (AgentRunning) { message = "Agent 已在运行"; return false; }
         if (goal.Length is < 3 or > 300)
-        { message = "请先在控制面板填写 3～300 字的任务目标并保存"; return false; }
+        { message = "请输入 3～300 字的任务目标"; return false; }
         PerceptionOptions options = _options();
         options.Normalize();
         if (!options.CloudEnabled || !options.UploadConsent)
@@ -38,14 +39,15 @@ public sealed partial class PerceptionService
         _agentCalls = 0;
         ReportAgent("正在启动");
         CancellationToken token = _agentStop.Token;
-        _agentTask = Task.Run(() => RunAgentAsync(goal, options.AgentMaxActions, token));
+        _agentTask = Task.Run(() => RunAgentAsync(goal, options.AgentMaxActions, quickMode, token));
         message = "已启动；可随时按“停止 Agent”快捷键中止";
         return true;
     }
 
     public void StopAgent() => _agentStop?.Cancel();
 
-    private async Task RunAgentAsync(string goal, int maxActions, CancellationToken cancellationToken)
+    private async Task RunAgentAsync(string goal, int maxActions, bool quickMode,
+        CancellationToken cancellationToken)
     {
         AgentLoopOutcome outcome;
         bool locked = false;
@@ -53,7 +55,7 @@ public sealed partial class PerceptionService
         {
             await _analysisLock.WaitAsync(cancellationToken);
             locked = true;
-            var environment = new LiveAgentEnvironment(this, goal);
+            var environment = new LiveAgentEnvironment(this, goal, quickMode);
             outcome = await new AgentLoopEngine().RunAsync(environment, maxActions,
                 ReportAgent, cancellationToken);
         }
@@ -83,13 +85,17 @@ public sealed partial class PerceptionService
     {
         private readonly PerceptionService _service;
         private readonly string _goal;
+        private readonly bool _quickMode;
         private readonly string _sessionId = Guid.NewGuid().ToString("N");
-        private readonly AgentConversation _conversation = new();
+        private readonly AgentConversation _conversation;
         private int _processId;
         private int _round;
+        private string? _expectedProcessName;
+        private HashSet<nint> _browserWindowsBeforeLaunch = [];
 
-        public LiveAgentEnvironment(PerceptionService service, string goal)
-        { _service = service; _goal = goal; }
+        public LiveAgentEnvironment(PerceptionService service, string goal, bool quickMode)
+        { _service = service; _goal = goal; _quickMode = quickMode;
+            _conversation = new AgentConversation(quickMode); }
 
         public async Task<AgentLoopFrame> CaptureAsync(CancellationToken cancellationToken)
         {
@@ -97,6 +103,22 @@ public sealed partial class PerceptionService
             await Task.Delay(420, cancellationToken);
             using var activity = new WindowsActivity();
             WindowInfo? window = activity.Foreground();
+            if (_expectedProcessName is { } expected)
+            {
+                for (int attempt = 0; attempt < 32 &&
+                     !string.Equals(window?.ProcessName, expected, StringComparison.OrdinalIgnoreCase);
+                     attempt++)
+                {
+                    AgentBrowserTool.FocusNewWindow(expected == "msedge" ? "edge" : "chrome",
+                        _browserWindowsBeforeLaunch);
+                    await Task.Delay(250, cancellationToken);
+                    window = activity.Foreground();
+                }
+                if (!string.Equals(window?.ProcessName, expected, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("浏览器没有切换到前台，Agent 已停止");
+                _processId = window!.ProcessId;
+                _expectedProcessName = null;
+            }
             if (window is null || window.ProcessId == Environment.ProcessId)
                 throw new InvalidOperationException("请将目标软件保持在前台");
             if (_processId == 0) _processId = window.ProcessId;
@@ -108,6 +130,7 @@ public sealed partial class PerceptionService
                 throw new InvalidOperationException("当前窗口未获上传授权或被隐私规则排除");
             IReadOnlyList<CapturedFrame> captured = await Task.Run(() =>
                 _service._capture.Capture(window), cancellationToken);
+            _service.AgentAfterCapture?.Invoke();
             CapturedFrame frame = captured.Where(item => item.Display.Bounds.Intersects(window.Bounds))
                 .OrderByDescending(item => item.Display.Bounds.Intersect(window.Bounds).Width *
                     (long)item.Display.Bounds.Intersect(window.Bounds).Height).FirstOrDefault()
@@ -149,7 +172,7 @@ public sealed partial class PerceptionService
             try
             {
                 AgentToolDecision decision = await _service._cloud.NextAgentToolAsync(
-                    _conversation, frame, _goal, history, cancellationToken);
+                    _conversation, frame, _goal, history, cancellationToken, _quickMode);
                 record = record with { Status = decision.Kind == AgentToolKind.Finish
                     ? "agent_finished" : "agent_action", Reason = decision.Kind == AgentToolKind.Finish
                     ? decision.Summary : decision.Label, RawResponse = decision.RawResponse,
@@ -171,7 +194,37 @@ public sealed partial class PerceptionService
         public async Task<AgentActionFeedback> ExecuteAsync(AgentLoopFrame frame,
             AgentToolDecision decision, CancellationToken cancellationToken)
         {
+            if (decision.Kind == AgentToolKind.OpenBrowser)
+            {
+                using var beforeLaunch = new WindowsActivity();
+                WindowInfo? foreground = beforeLaunch.Foreground();
+                bool sameWindow = foreground?.Handle == frame.Window.Handle &&
+                    foreground.ProcessId == frame.Window.ProcessId;
+                string browserName = decision.Value == "edge" ? "edge" : "chrome";
+                _browserWindowsBeforeLaunch = AgentBrowserTool.SnapshotWindows(browserName);
+                bool executed = _quickMode && sameWindow && decision.Value is { } browser &&
+                    AgentBrowserTool.TryLaunch(browser, out _);
+                if (executed)
+                {
+                    _expectedProcessName = browserName == "edge" ? "msedge" : "chrome";
+                    _service._agentActions++;
+                }
+                var result = new AgentActionFeedback(decision, executed,
+                    executed ? "浏览器已启动；等待新窗口截图验证" :
+                    !sameWindow ? "前台窗口已变化，未启动浏览器" : "浏览器未能启动");
+                _conversation.AddToolResult(decision, result);
+                if (executed) await Task.Delay(1000, cancellationToken);
+                return result;
+            }
             using var activity = new WindowsActivity();
+            bool browserWindow = frame.Window.ProcessName is "chrome" or "msedge";
+            if (decision.Kind == AgentToolKind.Navigate && (!_quickMode || !browserWindow))
+            {
+                var blocked = new AgentActionFeedback(decision, false,
+                    "仅快捷 Agent 可在 Chrome 或 Edge 地址栏访问网页");
+                _conversation.AddToolResult(decision, blocked);
+                return blocked;
+            }
             if (!AgentMouseTool.IsAllowed(frame, decision, activity.Foreground(), out string reason))
             {
                 var blocked = new AgentActionFeedback(decision, false, reason);
@@ -182,24 +235,42 @@ public sealed partial class PerceptionService
                 decision.X, decision.Y, decision.Label));
             try
             {
-                await Task.Delay(180, cancellationToken);
+                await Task.Delay(_quickMode ? 680 : 180, cancellationToken);
                 using var freshActivity = new WindowsActivity();
                 bool stillAllowed = AgentMouseTool.IsAllowed(frame, decision,
                     freshActivity.Foreground(), out string latestReason);
-                bool executed = stillAllowed && AgentMouseTool.Execute(decision);
+                bool clicked = stillAllowed && AgentMouseTool.Execute(
+                    decision.Kind == AgentToolKind.Navigate
+                        ? decision with { Kind = AgentToolKind.Click } : decision,
+                    preserveUserCursor: _quickMode);
+                bool executed = clicked;
+                if (clicked && decision.Kind == AgentToolKind.Navigate)
+                {
+                    using var beforeTyping = new WindowsActivity();
+                    WindowInfo? focused = beforeTyping.Foreground();
+                    executed = focused?.Handle == frame.Window.Handle &&
+                        focused.ProcessId == frame.Window.ProcessId &&
+                        AgentKeyboardTool.Navigate(decision.Value ?? "");
+                }
                 if (executed) _service._agentActions++;
                 var result = new AgentActionFeedback(decision, executed,
-                    executed ? "鼠标动作已发出；结果待下一帧截图验证" :
-                    stillAllowed ? "Windows 未接受鼠标动作" : latestReason);
+                    executed ? (decision.Kind == AgentToolKind.Navigate
+                        ? "已在浏览器地址栏输入网址；等待新截图验证页面" :
+                        "鼠标动作已发出；结果待下一帧截图验证") :
+                    !stillAllowed ? latestReason : "Windows 未接受鼠标或键盘动作");
                 _conversation.AddToolResult(decision, result);
-                await Task.Delay(650, cancellationToken);
+                await Task.Delay(decision.Kind == AgentToolKind.Navigate ? 1600 : 650,
+                    cancellationToken);
                 return result;
             }
             finally
             {
-                _service.AgentVisual?.Invoke(new AgentActionVisual(false, decision.Kind,
-                    decision.X, decision.Y, decision.Label));
-                await Task.Delay(300, CancellationToken.None);
+                if (!_quickMode)
+                {
+                    _service.AgentVisual?.Invoke(new AgentActionVisual(false, decision.Kind,
+                        decision.X, decision.Y, decision.Label));
+                    await Task.Delay(300, CancellationToken.None);
+                }
             }
         }
     }

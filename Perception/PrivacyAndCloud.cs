@@ -21,7 +21,9 @@ public static class PrivacyFilter
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static bool IsSensitive(WindowInfo? window, PerceptionOptions options) =>
-        window is null || options.SensitiveProcesses.Any(name =>
+        window is null || new[] { "LockApp", "LogonUI", "CredentialUIBroker" }
+            .Contains(window.ProcessName, StringComparer.OrdinalIgnoreCase) ||
+        options.SensitiveProcesses.Any(name =>
             window.ProcessName.Contains(name, StringComparison.OrdinalIgnoreCase)) ||
         options.SensitiveTitleWords.Any(word =>
             window.Title.Contains(word, StringComparison.OrdinalIgnoreCase));

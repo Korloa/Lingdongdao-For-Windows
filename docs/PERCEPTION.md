@@ -28,6 +28,12 @@
 
 Agent 仅操作启动时的进程；切换到其他软件、隐私检查失败、云端异常或用户中止都会停止。默认最多执行 8 次鼠标动作、最长运行 5 分钟；最后一次动作后仍可让模型查看新截图。控制面板可调步数和每日预估云端预算；每轮云端判断都占用一次预算额度。步数或预算耗尽时停止并显示未完成，避免无限点击或无限扣费。Agent 不提供键盘输入、文件修改或命令执行工具。每轮截图和工具回复会作为加密云端调用记录保存。当前实现只支持左键单击和右键单击，不能完成需要输入文字、拖拽或跨进程切换的任务。
 
+### 快捷指令 Agent
+
+在目标软件前按 **Ctrl+Alt+K**，在弹出的输入框中写任务并按 Enter。可以说“打开 Google 浏览器，进入 baidu.com”。快捷指令模式新增 `open_browser` 与 `navigate` 工具：前者只启动本机 Chrome/Edge 新窗口，后者只在当前 Chrome/Edge 的可见地址栏点击并输入 HTTP(S) 网址；本机回环地址、私有 IP 字面地址及带账号密码的网址会被拒绝。普通点击和右键仍限当前窗口，密码控件不可点击；浏览器启动后只允许切换到预期的浏览器进程，其他意外窗口切换会停止。Agent 不提供通用键盘输入、命令执行或文件读写工具。Windows 锁屏与登录界面不会上传截图。
+
+蓝色光标是置顶、点击穿透的独立视觉光标，约 620 ms 平滑移动到目标并停住；真实鼠标在发送点击时短暂定位，若用户没有移动它会恢复原位。截图时蓝色光标会隐藏，防止影响云端识别；每一步重新截图并等待云端确认。Esc 关闭输入框，默认 **Ctrl+Alt+Shift+X** 停止运行。快捷键可在“启动与快捷键”修改；截图授权、密钥、预算与旧 Agent 相同。此模式的 URL 访问已经过 Mock API 与离线协议测试；实际网站加载、浏览器窗口焦点和具体任务的成功率依赖本机与云端返回，不能保证所有自然语言任务都可执行。
+
 DeepSeek 的 `deepseek-flash` 支持图片和函数工具调用：[视觉输入](https://api-docs.deepseek.com/guides/vision/)、[工具调用](https://api-docs.deepseek.com/guides/tool_calls/)。由于该 Chat Completions 接口的图片放在 `user` 消息里，程序先回传工具结果，再发送包含新截图的下一条 `user` 消息。工具参数仍由本地校验，云端返回的坐标不直接信任。
 
 本地评分覆盖终端、编辑器、浏览器和 UIA 错误弹窗，以及重复点击。编辑器仍在输入时降低不确定事件分数；同一事件持续出现或重复操作时提高分数；提供过相似建议后降低分数。控制面板同时显示**当前判断**与最近 2 分钟的**待关注事件**，避免正常画面覆盖刚发现的高分问题。分数仍是规则启发式值，正常活动会保持低分。
@@ -103,6 +109,8 @@ dotnet run --project .\PerceptionTests\PerceptionTests.csproj -c Release -- --se
 
 Agent 离线回放覆盖点击、右键参数解析、窗口和坐标校验、工具结果加新截图回传、成功结束、步数耗尽停止；`--agent-tool-smoke` 用合成 JPEG 请求一次真实 DeepSeek 函数工具调用，不执行鼠标动作。本机已验证模型返回可解析的 `finish` 调用。WPF 烟测验证坐标浮层能显示文字和物理坐标、不会激活抢焦点、使用穿透式窗口样式。`--live-service-enhanced --live-debug` 已实测产生 84 个 OCR 区域和 58 个融合 GUI 控件区域，调试覆盖层在 WPF 烟测中验证了点击穿透及 Windows 截图排除。尚未在用户指定的真实任务软件里验证自动点击结果，因此不能把合成测试视为真实任务完成率证明。
 
+v0.9.0 新增测试覆盖 `open_browser` → `navigate` → 新截图 → `finish` 的 Mock API 完整协议，以及 URL、锁屏隐私、键盘输入结构和蓝色光标点击穿透。`--quick-agent-tool-smoke` 已向真实 DeepSeek 验证五种工具定义可被接受。`--live-quick-agent` 已在 Chrome 前台实际点击地址栏、访问 baidu.com，并在第二张截图后由模型确认百度首页；从资源管理器启动浏览器的实测途中 Windows 会话进入锁屏，浏览器无法到前台，Agent 停止。该情况下已补充锁屏截图排除与新浏览器窗口激活，尚需在未锁屏的桌面再次验证完整的跨进程路径。
+
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
 独立 WPF 界面烟测已验证新版 EXE 能启动，并能通过 Ctrl+Alt+D 打开感知设置面板；测试后已恢复原安装版进程。该界面进程本身曾观察到约 214 MB 工作集（当时感知关闭），因此启用增强模式后整款应用可能超过 500 MB；上面的 417～450 MB 是感知测试宿主与模型进程合计值，不代表完整灵动岛的内存上限。
@@ -115,8 +123,8 @@ Agent 离线回放覆盖点击、右键参数解析、窗口和坐标校验、�
 | `Perception/ScreenCapture.cs`, `ChangeDetector.cs`, `WindowsActivity.cs`, `UiAutomationReader.cs` | 采集和初筛 |
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
 | `Perception/CloudCallHistory.cs`, `LingDongDao/CloudHistoryWindow.xaml` | 本机加密调用记录及截图、完整回复查看 |
-| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentMouseTool.cs`, `PerceptionService.Agent.cs` | Agent 循环、云端函数工具、鼠标执行与运行控制 |
-| `LingDongDao/AgentActionOverlay.cs` | 点击位置文字和坐标浮层 |
+| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `PerceptionService.Agent.cs` | Agent 循环、云端函数工具、浏览器启动、受限网址输入和运行控制 |
+| `LingDongDao/AgentActionOverlay.cs`, `AgentGhostCursorOverlay.cs`, `AgentCommandWindow.cs` | 点击坐标浮层、蓝色光标和快捷指令输入框 |
 | `LingDongDao/PerceptionDebugOverlay.cs` | OCR/GUI 识别框与坐标调试浮层，Windows 截图排除 |
 | `LingDongDao/CurrentWeather.cs` | 当前温度、WMO 天气代码及更新时间解析 |
 | `Perception/PythonRuntime.cs` | 源码及测试目录向上寻找本地 Python 和 GUI ONNX 运行时 |

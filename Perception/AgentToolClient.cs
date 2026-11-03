@@ -7,17 +7,23 @@ namespace LingDongDao.Perception;
 
 public sealed class AgentConversation
 {
-    private readonly List<object> _messages =
-    [
-        new { role = "system", content =
-            "You operate one Windows application for the user's explicit task. " +
-            "Call exactly one tool each turn: click, right_click, or finish. " +
-            "Coordinates must be absolute physical screen pixels inside the supplied screenshot bounds. " +
-            "The image is the current screen after the previous tool result. Verify success visually before finish(success=true). " +
-            "If the task cannot be completed with these mouse tools, call finish(success=false). " +
-            "Do not guess hidden controls, click outside the task window, or claim success without visual evidence. " +
-            "Use short Chinese labels and summaries." }
-    ];
+    private readonly List<object> _messages;
+    private readonly bool _quickMode;
+
+    public AgentConversation(bool quickMode = false)
+    {
+        _quickMode = quickMode;
+        string tools = quickMode
+            ? "You may use open_browser (chrome or edge) to open a browser, then navigate to an HTTP(S) URL using the visible address bar. You may also click or right_click. "
+            : "You operate one Windows application. Call only click, right_click, or finish. ";
+        _messages = [new { role = "system", content =
+            "You are a visible desktop agent carrying out the user's explicit task. " + tools +
+            "Call exactly one tool each turn. Coordinates are absolute physical screen pixels inside the current screenshot bounds. " +
+            "After every action you receive a new screenshot. Verify the requested result in that screenshot before finish(success=true). " +
+            "If the task cannot be completed with available tools, call finish(success=false). " +
+            "Do not guess hidden controls, click password fields, or claim success without visual evidence. " +
+            "Use short Chinese labels and summaries." }];
+    }
 
     public IReadOnlyList<object> Messages => _messages;
 
@@ -32,7 +38,8 @@ public sealed class AgentConversation
             $"width={frame.Bounds.Width}, height={frame.Bounds.Height}。\n上一轮工具结果：{previous}\n" +
             $"OCR：{JsonSerializer.Serialize(frame.Package.Ocr.Take(80))}\n" +
             $"控件：{JsonSerializer.Serialize(frame.Package.Gui.Take(80))}\n" +
-            "请根据新截图判断任务是否已完成；若未完成，仅调用一个鼠标工具。";
+            (_quickMode ? "请根据新截图判断任务是否已完成；如需打开浏览器可调用 open_browser，再调用 navigate 访问网址。" :
+                "请根据新截图判断任务是否已完成；若未完成，仅调用一个鼠标工具。");
         _messages.Add(new { role = "user", content = new object[]
         {
             new { type = "text", text = prompt },
@@ -77,10 +84,30 @@ public sealed partial class ConfigurableCloudAgent
                 summary = new { type = "string", description = "Short Chinese explanation of observed result" }
             }, required = new[] { "success", "summary" }, additionalProperties = false } } }
     ];
+    private static readonly object[] QuickAgentTools =
+    [
+        ..AgentTools,
+        new { type = "function", function = new { name = "open_browser",
+            description = "Open a new Chrome or Edge browser window. Use only for a user-requested browser task.",
+            parameters = new { type = "object", properties = new
+            {
+                browser = new { type = "string", @enum = new[] { "chrome", "edge" } },
+                label = new { type = "string", description = "Short Chinese action label" }
+            }, required = new[] { "browser", "label" }, additionalProperties = false } } },
+        new { type = "function", function = new { name = "navigate",
+            description = "In the foreground Chrome or Edge window, move the visible agent cursor to the address bar, click, then navigate to an HTTP(S) URL.",
+            parameters = new { type = "object", properties = new
+            {
+                url = new { type = "string", description = "Full HTTP(S) URL requested by the user" },
+                x = new { type = "integer", description = "Address bar screen X coordinate" },
+                y = new { type = "integer", description = "Address bar screen Y coordinate" },
+                label = new { type = "string", description = "Short Chinese action label" }
+            }, required = new[] { "url", "x", "y", "label" }, additionalProperties = false } } }
+    ];
 
     public async Task<AgentToolDecision> NextAgentToolAsync(AgentConversation conversation,
         AgentLoopFrame frame, string goal, IReadOnlyList<AgentActionFeedback> history,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool quickMode = false)
     {
         string? apiKey = ResolveKey();
         if (!Available || string.IsNullOrWhiteSpace(apiKey))
@@ -89,7 +116,8 @@ public sealed partial class ConfigurableCloudAgent
         var body = new Dictionary<string, object>
         {
             ["model"] = _model!, ["messages"] = conversation.Messages,
-            ["tools"] = AgentTools, ["tool_choice"] = "required", ["max_tokens"] = 450
+            ["tools"] = quickMode ? QuickAgentTools : AgentTools,
+            ["tool_choice"] = "required", ["max_tokens"] = 450
         };
         if (Uri.TryCreate(_endpoint, UriKind.Absolute, out Uri? uri) &&
             uri.Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase))
@@ -124,6 +152,29 @@ public sealed partial class ConfigurableCloudAgent
             if (summary.Length > 400) summary = summary[..400];
             return new AgentToolDecision(id, AgentToolKind.Finish, 0, 0,
                 "完成", success, summary, raw);
+        }
+        if (name == "open_browser")
+        {
+            string browser = (input.GetProperty("browser").GetString() ?? "").Trim().ToLowerInvariant();
+            if (browser is not ("chrome" or "edge"))
+                throw new InvalidDataException("Unsupported browser");
+            string browserLabel = (input.GetProperty("label").GetString() ?? "打开浏览器").Trim();
+            if (browserLabel.Length > 48) browserLabel = browserLabel[..48];
+            return new AgentToolDecision(id, AgentToolKind.OpenBrowser, 0, 0, browserLabel,
+                false, "", raw, browser);
+        }
+        if (name == "navigate")
+        {
+            string requestedUrl = input.GetProperty("url").GetString() ?? "";
+            if (!AgentBrowserTool.TryNormalizeUrl(requestedUrl, out string url))
+                throw new InvalidDataException("Unsupported browser URL");
+            int navigateX = input.GetProperty("x").GetInt32();
+            int navigateY = input.GetProperty("y").GetInt32();
+            string navigateLabel = (input.GetProperty("label").GetString() ?? "访问网页").Trim();
+            if (navigateLabel.Length > 48) navigateLabel = navigateLabel[..48];
+            return new AgentToolDecision(id, AgentToolKind.Navigate, navigateX, navigateY,
+                navigateLabel,
+                false, "", raw, url);
         }
         AgentToolKind kind = name switch
         {

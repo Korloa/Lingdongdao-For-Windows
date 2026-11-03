@@ -490,7 +490,7 @@
                         <TextBox x:Name="AgentGoalBox" Height="70" AcceptsReturn="True" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto" Background="#111C25" Foreground="#E8F1ED"
                                  BorderBrush="#3A5362" Padding="8"/>
-                        <local:SettingSlider x:Name="AgentMaxActionsSlider" Label="Agent 最多点击步数" Unit="步"
+                        <local:SettingSlider x:Name="AgentMaxActionsSlider" Label="Agent 最多操作步数" Unit="步"
                                              Minimum="1" Maximum="20" Step="1" Decimals="0"/>
                         <local:SettingSlider x:Name="CloudDailyBudgetSlider" Label="每日云端预估预算" Unit="美元"
                                              Minimum="0.05" Maximum="5" Step="0.05" Decimals="2"/>
@@ -537,6 +537,10 @@
                         <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <TextBlock Text="启动 Agent" VerticalAlignment="Center" Foreground="#DCE8ED"/>
                             <TextBox x:Name="AgentStartHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
+                        </Grid>
+                        <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="召唤 Agent" VerticalAlignment="Center" Foreground="#DCE8ED"/>
+                            <TextBox x:Name="AgentCommandHotkeyBox" Grid.Column="1" Style="{StaticResource HotkeyBoxStyle}" PreviewKeyDown="HotkeyBox_PreviewKeyDown"/>
                         </Grid>
                         <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <TextBlock Text="停止 Agent" VerticalAlignment="Center" Foreground="#DCE8ED"/>

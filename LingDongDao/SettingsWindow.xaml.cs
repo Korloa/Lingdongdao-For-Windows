@@ -192,6 +192,7 @@ public partial class SettingsWindow : Window
         CompressHotkeyBox.Text = _working.ImageCompressHotkey;
         ManualAnalysisHotkeyBox.Text = _working.ManualAnalysisHotkey;
         AgentStartHotkeyBox.Text = _working.AgentStartHotkey;
+        AgentCommandHotkeyBox.Text = _working.AgentCommandHotkey;
         AgentStopHotkeyBox.Text = _working.AgentStopHotkey;
     }
 
@@ -219,6 +220,7 @@ public partial class SettingsWindow : Window
             (box != PanelHotkeyBox && box != FormatHotkeyBox &&
              box != StyleHotkeyBox && box != CompressHotkeyBox &&
              box != ManualAnalysisHotkeyBox && box != AgentStartHotkeyBox &&
+             box != AgentCommandHotkeyBox &&
              box != AgentStopHotkeyBox)) return false;
         if (!GlobalHotkey.TryFormatNative(packed & 0xFFFF, packed >> 16, out string value)) return false;
         box.Text = value;
@@ -305,6 +307,7 @@ public partial class SettingsWindow : Window
         _working.ImageCompressHotkey = CompressHotkeyBox.Text;
         _working.ManualAnalysisHotkey = ManualAnalysisHotkeyBox.Text;
         _working.AgentStartHotkey = AgentStartHotkeyBox.Text;
+        _working.AgentCommandHotkey = AgentCommandHotkeyBox.Text;
         _working.AgentStopHotkey = AgentStopHotkeyBox.Text;
         _working.AgentGoal = AgentGoalBox.Text;
         string? error = _apply(_working.Clone());

@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private const int ManualAnalysisHotkeyId = 0x11D4;
     private const int AgentStartHotkeyId = 0x11D5;
     private const int AgentStopHotkeyId = 0x11D6;
+    private const int AgentCommandHotkeyId = 0x11D7;
     private const int WmHotkey = 0x0312;
 
     private AppSettings _settings;
@@ -42,6 +43,9 @@ public partial class MainWindow : Window
     private readonly MusicMonitor _musicMonitor;
     private readonly PerceptionService _perception;
     private AgentActionOverlay? _agentOverlay;
+    private AgentGhostCursorOverlay? _ghostCursor;
+    private AgentCommandWindow? _agentCommandWindow;
+    private bool _quickAgentActive;
     private PerceptionDebugOverlay? _debugOverlay;
     private readonly DispatcherTimer _closeTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
     private readonly DispatcherTimer _imageHoverCloseTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
@@ -116,13 +120,24 @@ public partial class MainWindow : Window
         _perception.AgentBeforeCapture += () =>
         {
             if (!Dispatcher.HasShutdownStarted)
-                Dispatcher.Invoke(() => { _agentOverlay?.HideAction(); Collapse(); });
+                Dispatcher.Invoke(() =>
+                { _agentOverlay?.HideAction(); _ghostCursor?.HideForCapture(); Collapse(); });
+        };
+        _perception.AgentAfterCapture += () =>
+        {
+            if (!Dispatcher.HasShutdownStarted && _quickAgentActive)
+                Dispatcher.BeginInvoke(new Action(() => _ghostCursor?.Resume()));
         };
         _perception.AgentCompleted += outcome =>
         {
             if (!Dispatcher.HasShutdownStarted)
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    if (_quickAgentActive)
+                    {
+                        _ghostCursor?.Stop();
+                        _quickAgentActive = false;
+                    }
                     string detail = string.IsNullOrWhiteSpace(outcome.Summary)
                         ? outcome.Status : outcome.Summary;
                     if (detail.Length > 66) detail = detail[..65] + "…";
@@ -182,6 +197,7 @@ public partial class MainWindow : Window
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开控制面板", null, (_, _) => Dispatcher.Invoke(OpenSettings));
         menu.Items.Add("桌面感知状态", null, (_, _) => Dispatcher.Invoke(OpenPerceptionSettings));
+        menu.Items.Add("召唤 Agent", null, (_, _) => Dispatcher.Invoke(OpenAgentCommand));
         _startupMenuItem = new Forms.ToolStripMenuItem("开机自动启动")
         {
             Checked = _settings.StartWithWindows
@@ -263,9 +279,51 @@ public partial class MainWindow : Window
 
     private void ShowAgentVisual(AgentActionVisual cue)
     {
+        if (_quickAgentActive)
+        {
+            if (cue.Visible) _ghostCursor?.MoveTo(cue);
+            else _ghostCursor?.Stop();
+            return;
+        }
         if (!cue.Visible) { _agentOverlay?.HideAction(); return; }
         _agentOverlay ??= new AgentActionOverlay();
         _agentOverlay.ShowAction(cue);
+    }
+
+    private void OpenAgentCommand()
+    {
+        if (_agentCommandWindow is not null)
+        { _agentCommandWindow.Activate(); return; }
+        if (_perception.AgentRunning)
+        {
+            ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                "Agent 正在运行", "可用停止 Agent 快捷键中断当前任务"), false, true);
+            return;
+        }
+        IntPtr previousWindow = GetForegroundWindow();
+        var prompt = new AgentCommandWindow();
+        _agentCommandWindow = prompt;
+        prompt.Closed += (_, _) => _agentCommandWindow = null;
+        prompt.Submitted += goal => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_pickerOpen || _imageEditing)
+            {
+                ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                    "Agent 未启动", "请先结束图片编辑或选择栏"), false, true);
+                return;
+            }
+            if (previousWindow != IntPtr.Zero) SetForegroundWindow(previousWindow);
+            if (!GetCursorPos(out NativePoint point)) point = new NativePoint();
+            _ghostCursor ??= new AgentGhostCursorOverlay();
+            _quickAgentActive = true;
+            bool started = _perception.TryStartAgent(goal, out string message, quickMode: true);
+            if (started) _ghostCursor.Start(point.X, point.Y);
+            else { _ghostCursor.Stop(); _quickAgentActive = false; }
+            ShowNoticeCore(new IslandNotice(NoticeKind.AgentSuggestion,
+                started ? "Agent 已启动" : "Agent 未启动", message), false, true);
+        }));
+        prompt.Show();
+        prompt.Activate();
     }
 
     private void StartAgentFromHotkey()
@@ -481,6 +539,11 @@ public partial class MainWindow : Window
             StopAgentFromHotkey();
             handled = true;
         }
+        else if (message == WmHotkey && wParam.ToInt32() == AgentCommandHotkeyId)
+        {
+            OpenAgentCommand();
+            handled = true;
+        }
         return IntPtr.Zero;
     }
 
@@ -515,6 +578,7 @@ public partial class MainWindow : Window
         (CompressHotkeyId, "图片压缩", settings.ImageCompressHotkey, settings.ImageCompressionEnabled),
         (ManualAnalysisHotkeyId, "主动分析", settings.ManualAnalysisHotkey, true),
         (AgentStartHotkeyId, "启动 Agent", settings.AgentStartHotkey, true),
+        (AgentCommandHotkeyId, "召唤 Agent", settings.AgentCommandHotkey, true),
         (AgentStopHotkeyId, "停止 Agent", settings.AgentStopHotkey, true)
     ];
 

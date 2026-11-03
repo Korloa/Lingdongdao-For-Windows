@@ -399,6 +399,19 @@ Type mouseInputType = typeof(AgentMouseTool).GetNestedType("Input",
     BindingFlags.NonPublic)!;
 Check(System.Runtime.InteropServices.Marshal.SizeOf(mouseInputType) ==
     (IntPtr.Size == 8 ? 40 : 28), "8g2 SendInput structure matches Windows layout");
+Check(AgentBrowserTool.TryNormalizeUrl("baidu.com", out string baiduUrl) &&
+    baiduUrl == "https://baidu.com/" &&
+    !AgentBrowserTool.TryNormalizeUrl("file:///C:/private.txt", out _) &&
+    !AgentBrowserTool.TryNormalizeUrl("http://127.0.0.1/", out _) &&
+    !AgentBrowserTool.TryNormalizeUrl("https://user:password@example.com", out _),
+    "8g3 browser tool accepts public HTTP(S) URLs and blocks local or credential URLs");
+Check(PrivacyFilter.IsSensitive(terminal with { ProcessName = "LockApp" }, options),
+    "8g3a lock screen cannot be uploaded to the cloud");
+Type keyboardInputType = typeof(AgentBrowserTool).Assembly
+    .GetType("LingDongDao.Perception.AgentKeyboardTool", true)!
+    .GetNestedType("Input", BindingFlags.NonPublic)!;
+Check(System.Runtime.InteropServices.Marshal.SizeOf(keyboardInputType) == 40,
+    "8g4 keyboard SendInput structure matches Windows layout");
 var agentEnvironment = new FakeAgentEnvironment(agentFrame, finishAfterActions: 1);
 AgentLoopOutcome agentOutcome = await new AgentLoopEngine().RunAsync(agentEnvironment,
     4, null, CancellationToken.None);
@@ -429,6 +442,31 @@ using (var agentClient = new ConfigurableCloudAgent(agentHandler,
         secondTool.Kind == AgentToolKind.Finish && secondTool.Success &&
         agentHandler.SawToolDefinition && agentHandler.SawSecondScreenshotAndToolResult,
         "8j cloud tool protocol sends action result plus new screenshot before finish");
+}
+var quickHandler = new MockQuickAgentToolHandler();
+using (var quickClient = new ConfigurableCloudAgent(quickHandler,
+           "https://mock.invalid/v1/chat/completions", "mock-vision", "test-only"))
+{
+    var conversation = new AgentConversation(quickMode: true);
+    var quickHistory = new List<AgentActionFeedback>();
+    AgentToolDecision browserDecision = await quickClient.NextAgentToolAsync(conversation,
+        agentFrame, "打开 Google 浏览器，进入百度", quickHistory, CancellationToken.None,
+        quickMode: true);
+    quickHistory.Add(new AgentActionFeedback(browserDecision, true, "浏览器已启动"));
+    conversation.AddToolResult(browserDecision, quickHistory[^1]);
+    AgentToolDecision navigate = await quickClient.NextAgentToolAsync(conversation,
+        agentFrame, "打开 Google 浏览器，进入百度", quickHistory, CancellationToken.None,
+        quickMode: true);
+    quickHistory.Add(new AgentActionFeedback(navigate, true, "已输入网址"));
+    conversation.AddToolResult(navigate, quickHistory[^1]);
+    AgentToolDecision finished = await quickClient.NextAgentToolAsync(conversation,
+        agentFrame, "打开 Google 浏览器，进入百度", quickHistory, CancellationToken.None,
+        quickMode: true);
+    Check(browserDecision.Kind == AgentToolKind.OpenBrowser && browserDecision.Value == "chrome" &&
+        navigate.Kind == AgentToolKind.Navigate && navigate.Value == "https://www.baidu.com/" &&
+        finished.Kind == AgentToolKind.Finish && finished.Success &&
+        quickHandler.SawQuickTools && quickHandler.SawScreenshotsAfterActions,
+        "8j1 quick agent opens browser, navigates, then confirms against a fresh screenshot");
 }
 
 try { throw new HttpRequestException("mock cloud unavailable"); }
@@ -464,6 +502,51 @@ if (args.Contains("--agent-tool-smoke"))
     Console.WriteLine($"AGENT_TOOL_SMOKE kind={tool.Kind} label_length={tool.Label.Length}");
 }
 
+if (args.Contains("--quick-agent-tool-smoke"))
+{
+    using var toolClient = new ConfigurableCloudAgent();
+    AgentToolDecision tool = await toolClient.NextAgentToolAsync(new AgentConversation(quickMode: true),
+        agentFrame, "这是合成测试截图。不要执行动作，调用 finish(success=false) 表示测试结束。",
+        [], CancellationToken.None, quickMode: true);
+    Check(tool.Kind == AgentToolKind.Finish && !tool.Success,
+        "11c real DeepSeek vision accepts quick agent tools and returns finish");
+}
+
+if (args.Contains("--live-quick-agent"))
+{
+    if (args.Contains("--force-explorer"))
+    {
+        using Process? openedExplorer = Process.Start(new ProcessStartInfo("explorer.exe",
+            "shell:MyComputerFolder") { UseShellExecute = true });
+        await Task.Delay(1700);
+    }
+    using (var foregroundActivity = new WindowsActivity())
+        Console.WriteLine("LIVE_AGENT_FOREGROUND " + foregroundActivity.Foreground()?.ProcessName);
+    string settingsPath = Path.Combine(Environment.GetFolderPath(
+        Environment.SpecialFolder.LocalApplicationData), "LingDongDao", "settings.json");
+    using JsonDocument saved = JsonDocument.Parse(File.ReadAllText(settingsPath));
+    var liveOptions = JsonSerializer.Deserialize<PerceptionOptions>(
+        saved.RootElement.GetProperty("Perception").GetRawText())!;
+    if (!liveOptions.CloudEnabled || !liveOptions.UploadConsent)
+        throw new InvalidOperationException("Live agent requires saved screenshot consent");
+    using var service = new PerceptionService(() => liveOptions);
+    var completed = new TaskCompletionSource<AgentLoopOutcome>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    service.AgentCompleted += result => completed.TrySetResult(result);
+    service.Logged += entry =>
+    {
+        if (entry.Module == "agent") Console.WriteLine($"LIVE_AGENT {entry.Event}: {entry.Summary}");
+    };
+    bool started = service.TryStartAgent("打开 Google 浏览器，进入 baidu.com 网页",
+        out string startMessage, quickMode: true);
+    Console.WriteLine("LIVE_AGENT_START " + startMessage);
+    Check(started, "11d live quick agent starts with saved cloud consent");
+    AgentLoopOutcome result = await completed.Task.WaitAsync(TimeSpan.FromMinutes(3));
+    Console.WriteLine($"LIVE_AGENT_RESULT success={result.Success} actions={result.Actions} " +
+                      $"calls={result.CloudCalls} status={result.Status} detail={result.Summary}");
+    Check(result.Success, "11e live quick agent completes browser navigation");
+}
+
 if (args.Contains("--settings-smoke"))
 {
     Exception? uiFailure = null;
@@ -492,6 +575,7 @@ if (args.Contains("--settings-smoke"))
                 panel.FindName("ManualAnalysisHotkeyBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("AgentGoalBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("AgentStartHotkeyBox") is System.Windows.Controls.TextBox &&
+                panel.FindName("AgentCommandHotkeyBox") is System.Windows.Controls.TextBox &&
                 status.Text.Contains("deepseek-flash"),
                 "12 WPF settings loads DeepSeek key controls and cloud status");
             panelType.GetMethod("SelectPage", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -531,6 +615,23 @@ if (args.Contains("--settings-smoke"))
                 (exStyle.ToInt64() & 0x20) != 0,
                 "14 click marker shows action and physical coordinates without activation");
             overlay.Close();
+            Type ghostType = assembly.GetType("LingDongDao.AgentGhostCursorOverlay", true)!;
+            var ghost = (System.Windows.Window)Activator.CreateInstance(ghostType, nonPublic: true)!;
+            ghostType.GetMethod("Start")!.Invoke(ghost, [300, 220]);
+            ghostType.GetMethod("MoveTo")!.Invoke(ghost,
+                [new AgentActionVisual(true, AgentToolKind.Click, 380, 250, "测试点击")]);
+            nint ghostHandle = new System.Windows.Interop.WindowInteropHelper(ghost).Handle;
+            nint ghostStyle = (nint)ghostType.GetMethod("GetWindowLongPtr",
+                BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [ghostHandle, -20])!;
+            Check(ghost.IsVisible && !ghost.ShowActivated &&
+                (ghostStyle.ToInt64() & 0x20) != 0,
+                "14a blue agent cursor is visible and click-through");
+            ghost.Close();
+            Type promptType = assembly.GetType("LingDongDao.AgentCommandWindow", true)!;
+            var prompt = (System.Windows.Window)Activator.CreateInstance(promptType, nonPublic: true)!;
+            Check(prompt.Title == "召唤 Agent" && prompt.Content is System.Windows.Controls.Border,
+                "14b quick agent command window loads");
+            prompt.Close();
             Type debugType = assembly.GetType("LingDongDao.PerceptionDebugOverlay", true)!;
             var debug = (System.Windows.Window)Activator.CreateInstance(debugType, nonPublic: true)!;
             debugType.GetMethod("ShowObservation")!.Invoke(debug, [click]);
@@ -702,6 +803,49 @@ sealed class MockAgentToolHandler : HttpMessageHandler
             ? "{\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"click\",\"arguments\":\"{\\\"x\\\":120,\\\"y\\\":140,\\\"label\\\":\\\"测试点击\\\"}\"}}"
             : "{\"id\":\"call-2\",\"type\":\"function\",\"function\":{\"name\":\"finish\",\"arguments\":\"{\\\"success\\\":true,\\\"summary\\\":\\\"已完成\\\"}\"}}";
         string reply = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[" + tool + "]}}]}";
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        { Content = new StringContent(reply, Encoding.UTF8, "application/json") };
+    }
+}
+
+sealed class MockQuickAgentToolHandler : HttpMessageHandler
+{
+    private int _calls;
+    public bool SawQuickTools { get; private set; }
+    public bool SawScreenshotsAfterActions { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        using JsonDocument body = JsonDocument.Parse(await request.Content!
+            .ReadAsStringAsync(cancellationToken));
+        JsonElement root = body.RootElement;
+        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 5 &&
+            root.GetProperty("tools").EnumerateArray().Any(item =>
+                item.GetProperty("function").GetProperty("name").GetString() == "navigate");
+        JsonElement messages = root.GetProperty("messages");
+        int call = ++_calls;
+        if (call == 3)
+            SawScreenshotsAfterActions = messages.EnumerateArray().Count(item =>
+                item.GetProperty("role").GetString() == "tool") == 2 &&
+                messages[messages.GetArrayLength() - 1].GetProperty("content")[1]
+                    .GetProperty("type").GetString() == "image_url";
+        string name = call switch { 1 => "open_browser", 2 => "navigate", _ => "finish" };
+        object args = call switch
+        {
+            1 => new { browser = "chrome", label = "打开 Google 浏览器" },
+            2 => new { url = "https://www.baidu.com", x = 150, y = 50, label = "访问百度" },
+            _ => new { success = true, summary = "已在截图中看到百度页面" }
+        };
+        string reply = JsonSerializer.Serialize(new
+        {
+            choices = new[] { new { message = new
+            {
+                role = "assistant", content = (string?)null,
+                tool_calls = new[] { new { id = "quick-" + call, type = "function",
+                    function = new { name, arguments = JsonSerializer.Serialize(args) } } }
+            } } }
+        });
         return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         { Content = new StringContent(reply, Encoding.UTF8, "application/json") };
     }
