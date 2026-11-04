@@ -75,6 +75,7 @@ public sealed class PerceptionOptions
     public int CooldownSeconds { get; set; } = 300;
     public int AgentMaxActions { get; set; } = 8;
     public int QuickAgentMaxActions { get; set; } = 24;
+    public bool AgentVisualizationEnabled { get; set; } = true;
     public double AgentCursorSize { get; set; } = 40;
     public double AgentCursorGlowRadius { get; set; } = 22;
     public double AgentCursorGlowOpacity { get; set; } = 0.95;

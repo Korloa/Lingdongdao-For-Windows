@@ -483,12 +483,42 @@ Check(multilineCode.Kind == AgentToolKind.TypeText &&
     multilineCode.Value!.Contains('\n') &&
     newFileKeys.Kind == AgentToolKind.PressKeys &&
     AgentTaskPermissions.MayCreateFiles("在 VS Code 中创建 HTML 文件并写代码") &&
-    !AgentTaskPermissions.MayCreateFiles("打开网页看看"),
+    !AgentTaskPermissions.MayCreateFiles("打开网页看看") &&
+    !AgentTaskPermissions.MayCreateFiles(
+        "用 HTML/CSS/JS 制作动画并展示，不要写文件或打开浏览器") &&
+    !AgentTaskPermissions.RequiresBrowserPreview(
+        "用 HTML/CSS/JS 制作动画并展示，不要写文件或打开浏览器"),
     "8g3d1 multiline code and file creation shortcuts are supported");
 Check(AgentTaskPermissions.RequestedHtmlFileNames("创建 index.html 后打开")
         .Contains("index.html") &&
     AgentTaskPermissions.RequestedHtmlFileNames("创建 HTML 页面").Count == 0,
     "8g3d1a explicitly requested HTML filename is preserved");
+var visualization = new AgentVisualizationRequest("排序演示",
+    "<div id=\"value\">0</div>", "#value{font-size:72px}",
+    "visual.count('#value',0,100,500)", 820, 520);
+AgentToolDecision showVisual = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("show_visualization", new { title = visualization.Title,
+        html = visualization.Html, css = visualization.Css,
+        javascript = visualization.JavaScript, width = 820, height = 520,
+        label = "展示排序动画" }), true);
+AgentToolDecision closeVisual = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("close_visualization", new { label = "结束展示" }), true);
+AgentToolDecision blockedVisual = ConfigurableCloudAgent.ParseAgentToolResponse(
+    ToolEnvelope("show_visualization", new { title = "外链", html = "<iframe src='https://example.com'></iframe>",
+        css = "", javascript = "", label = "展示" }), true);
+string visualDocument = AgentVisualizationDocument.Build(visualization);
+Check(showVisual.Kind == AgentToolKind.ShowVisualization &&
+    closeVisual.Kind == AgentToolKind.CloseVisualization &&
+    blockedVisual.Kind == AgentToolKind.Rejected &&
+    ConfigurableCloudAgent.ParseAgentToolResponse(ToolEnvelope("show_visualization", new
+    { title = visualization.Title, html = visualization.Html, css = visualization.Css,
+      javascript = visualization.JavaScript, label = "展示" })).Kind == AgentToolKind.Rejected &&
+    visualDocument.Contains("Content-Security-Policy") &&
+    visualDocument.Contains("connect-src 'none'") &&
+    visualDocument.Contains("window.visual=Object.freeze") &&
+    !AgentVisualizationDocument.TryValidate(visualization with
+    { JavaScript = "const key='sk-" + new string('x', 20) + "';" }, out _),
+    "8g3d1b visualization tools parse and generated HTML blocks external resources and secrets");
 string fileTestFolder = Path.Combine(Path.GetTempPath(),
     "ldd-agent-files-" + Guid.NewGuid().ToString("N"));
 string fileTestHtml = Path.Combine(fileTestFolder, "index.html");
@@ -716,6 +746,23 @@ if (args.Contains("--quick-agent-tool-smoke"))
         "11c real DeepSeek vision accepts quick agent tools and returns finish");
 }
 
+if (args.Contains("--visualization-tool-smoke"))
+{
+    using var toolClient = new ConfigurableCloudAgent();
+    AgentToolDecision tool = await toolClient.NextAgentToolAsync(
+        new AgentConversation(quickMode: true), agentFrame,
+        "请在屏幕中央展示一个简洁的冒泡排序动画，演示 4 个数字交换位置。" +
+        "这个合成截图只是工具测试，不要点击桌面或创建文件。现在调用 show_visualization，" +
+        "用 HTML/CSS/JavaScript 制作可见的动画。", [], CancellationToken.None,
+        quickMode: true);
+    Check(tool.Kind == AgentToolKind.ShowVisualization &&
+        JsonSerializer.Deserialize<AgentVisualizationRequest>(tool.Value!) is { } request &&
+        AgentVisualizationDocument.TryValidate(request, out _),
+        "11c1 real DeepSeek chooses a valid HTML animation tool call");
+    Console.WriteLine($"VISUALIZATION_TOOL_CALL content_bytes=" +
+        $"{Encoding.UTF8.GetByteCount(tool.Value ?? "")} label={tool.Label}");
+}
+
 if (args.Contains("--live-quick-agent") || args.Contains("--live-desktop-agent") ||
     args.Contains("--live-text-agent") || args.Contains("--live-file-agent") ||
     args.Contains("--live-vscode-file-agent") || args.Contains("--live-explorer-file-agent"))
@@ -786,6 +833,87 @@ if (args.Contains("--live-quick-agent") || args.Contains("--live-desktop-agent")
     }
 }
 
+if (args.Contains("--live-visualization-agent"))
+{
+    string settingsPath = Path.Combine(Environment.GetFolderPath(
+        Environment.SpecialFolder.LocalApplicationData), "LingDongDao", "settings.json");
+    using JsonDocument saved = JsonDocument.Parse(File.ReadAllText(settingsPath));
+    var liveVisualOptions = JsonSerializer.Deserialize<PerceptionOptions>(
+        saved.RootElement.GetProperty("Perception").GetRawText())!;
+    liveVisualOptions.QuickAgentMaxActions = 6;
+    liveVisualOptions.AgentVisualizationEnabled = true;
+    var uiReady = new TaskCompletionSource<Dispatcher>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    var uiThread = new Thread(() =>
+    {
+        _ = new System.Windows.Application
+        { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
+        uiReady.SetResult(Dispatcher.CurrentDispatcher);
+        Dispatcher.Run();
+    });
+    uiThread.SetApartmentState(ApartmentState.STA);
+    uiThread.IsBackground = true;
+    uiThread.Start();
+    Dispatcher visualDispatcher = await uiReady.Task;
+    System.Windows.Window? visualPanel = null;
+    int visualCalls = 0;
+    using var service = new PerceptionService(() => liveVisualOptions);
+    service.AgentVisualizationRequested += (request, token) =>
+        visualDispatcher.InvokeAsync(async () =>
+        {
+            Interlocked.Increment(ref visualCalls);
+            Type type = typeof(LingDongDao.MainWindow).Assembly
+                .GetType("LingDongDao.AgentVisualizationWindow", true)!;
+            visualPanel ??= (System.Windows.Window)Activator.CreateInstance(type, nonPublic: true)!;
+            return await (Task<AgentVisualizationResult>)type.GetMethod("ShowContentAsync")!
+                .Invoke(visualPanel, [request, token])!;
+        }).Task.Unwrap();
+    service.AgentVisualizationCloseRequested += token =>
+        visualDispatcher.InvokeAsync(() =>
+        {
+            token.ThrowIfCancellationRequested();
+            visualPanel?.Close();
+            visualPanel = null;
+            return new AgentVisualizationResult(true, "测试面板已关闭");
+        }).Task;
+    service.Logged += entry =>
+    {
+        if (entry.Module == "agent") Console.WriteLine($"LIVE_VISUAL {entry.Event} {entry.Summary}");
+    };
+    var completed = new TaskCompletionSource<AgentLoopOutcome>(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    service.AgentCompleted += result => completed.TrySetResult(result);
+    using Process? notepad = Process.Start("notepad.exe");
+    await Task.Delay(1400);
+    WindowInfo? target = DesktopWindowInventory.VisibleWindows()
+        .Where(item => item.ProcessName.Equals("Notepad", StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(item => item.ProcessId == notepad?.Id)
+        .FirstOrDefault();
+    if (target is not null) DesktopWindowTool.Activate(target);
+    using (var activity = new WindowsActivity())
+        Console.WriteLine("LIVE_VISUAL_FOREGROUND " + activity.Foreground()?.ProcessName);
+    bool started = service.TryStartAgent(
+        "在屏幕中央用动画展示冒泡排序：让 4 个数字交换位置。" +
+        "请调用 show_visualization 制作 HTML/CSS/JS 动画，展示后查看新截图再结束。" +
+        "不要点击桌面、写文件或打开浏览器。", out string message, quickMode: true);
+    Console.WriteLine("LIVE_VISUAL_START " + message);
+    Check(started, "17 live visualization agent starts");
+    AgentLoopOutcome outcome = await completed.Task.WaitAsync(TimeSpan.FromMinutes(3));
+    Console.WriteLine($"LIVE_VISUAL_RESULT success={outcome.Success} actions={outcome.Actions} " +
+        $"calls={outcome.CloudCalls} visuals={visualCalls} summary={outcome.Summary}");
+    Check(outcome.Success && visualCalls > 0,
+        "17a cloud agent displays HTML animation and verifies it against a fresh screenshot");
+    await visualDispatcher.InvokeAsync(() =>
+    {
+        visualPanel?.Close();
+        System.Windows.Application.Current.Shutdown();
+        Dispatcher.ExitAllFrames();
+    });
+    if (!uiThread.Join(TimeSpan.FromSeconds(8)))
+        throw new TimeoutException("Visualization test UI thread did not stop");
+    notepad?.CloseMainWindow();
+}
+
 if (args.Contains("--settings-smoke"))
 {
     Exception? uiFailure = null;
@@ -815,6 +943,7 @@ if (args.Contains("--settings-smoke"))
                 panel.FindName("AgentGoalBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("AgentStartHotkeyBox") is System.Windows.Controls.TextBox &&
                 panel.FindName("AgentCommandHotkeyBox") is System.Windows.Controls.TextBox &&
+                panel.FindName("AgentVisualizationCheck") is System.Windows.Controls.CheckBox &&
                 panel.FindName("QuickAgentMaxActionsSlider") is System.Windows.FrameworkElement &&
                 panel.FindName("AgentCursorSizeSlider") is System.Windows.FrameworkElement &&
                 panel.FindName("AgentCursorCurveChoice") is System.Windows.Controls.ComboBox &&
@@ -943,6 +1072,98 @@ if (args.Contains("--settings-smoke"))
     uiThread.Start();
     uiThread.Join();
     if (uiFailure is not null) throw uiFailure;
+}
+
+if (args.Contains("--visualization-smoke"))
+{
+    Exception? visualFailure = null;
+    var visualThread = new Thread(() =>
+    {
+        var app = new System.Windows.Application
+        { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
+        var timeout = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
+        timeout.Tick += (_, _) =>
+        {
+            timeout.Stop();
+            visualFailure ??= new TimeoutException("Visualization did not render in time");
+            Dispatcher.ExitAllFrames();
+        };
+        timeout.Start();
+        Dispatcher.CurrentDispatcher.BeginInvoke(new Action(async () =>
+        {
+            System.Windows.Window? panel = null;
+            try
+            {
+                Type type = typeof(LingDongDao.MainWindow).Assembly
+                    .GetType("LingDongDao.AgentVisualizationWindow", true)!;
+                panel = (System.Windows.Window)Activator.CreateInstance(type, nonPublic: true)!;
+                var request = new AgentVisualizationRequest("数据流演示",
+                    "<section class='scene'><div class='orb'></div><h1>数据流演示</h1>" +
+                    "<div class='meter'><span id='value'>0</span><small>%</small></div>" +
+                    "<div class='track'><i></i></div></section>",
+                    ".scene{height:100%;display:flex;flex-direction:column;align-items:center;" +
+                    "justify-content:center;background:radial-gradient(circle at 50% 30%,#193e62,#0b1320 65%)}" +
+                    ".orb{width:110px;height:110px;border-radius:50%;margin-bottom:15px;" +
+                    "background:radial-gradient(circle at 30% 30%,#bbf8ff,#429de6 45%,#725de3);" +
+                    "box-shadow:0 0 50px #479fe7;animation:pulse 1.4s ease-in-out infinite alternate}" +
+                    "@keyframes pulse{to{transform:scale(1.1);filter:hue-rotate(25deg)}}" +
+                    "h1{font-size:31px;margin:4px 0 8px}.meter{font-size:64px;font-weight:700}" +
+                    "small{font-size:25px}.track{width:55%;height:8px;border-radius:10px;background:#26394c}" +
+                    ".track i{display:block;width:100%;height:100%;border-radius:10px;" +
+                    "background:linear-gradient(90deg,#56d8f1,#9275f4);transform-origin:left;" +
+                    "animation:fill 1s ease-out both}@keyframes fill{from{transform:scaleX(0)}}",
+                    "visual.count('#value',0,100,800)", 760, 490);
+                var show = (Task<AgentVisualizationResult>)type.GetMethod("ShowContentAsync")!
+                    .Invoke(panel, [request, CancellationToken.None])!;
+                AgentVisualizationResult result = await show;
+                await Task.Delay(1100);
+                var browser = type.GetField("_browser", BindingFlags.Instance |
+                    BindingFlags.NonPublic)!.GetValue(panel)!;
+                var core = browser.GetType().GetProperty("CoreWebView2")!.GetValue(browser)!;
+                var evaluate = (Task<string>)core.GetType().GetMethod("ExecuteScriptAsync")!
+                    .Invoke(core, ["document.querySelector('#value').textContent"])!;
+                string? value = JsonSerializer.Deserialize<string>(await evaluate);
+                Console.WriteLine($"VISUALIZATION_DIAG shown={result.Shown} detail={result.Detail} " +
+                    $"visible={panel.IsVisible} value={value ?? "<null>"} style={panel.WindowStyle}");
+                Check(result.Shown && panel.IsVisible && value == "100" &&
+                    panel.WindowStyle == System.Windows.WindowStyle.None,
+                    "16 WebView2 displays the borderless animated visualization and runs JS");
+                var startFetch = (Task<string>)core.GetType().GetMethod("ExecuteScriptAsync")!
+                    .Invoke(core, ["window.__fetchOutcome='pending';fetch('https://example.com/').then(()=>window.__fetchOutcome='allowed').catch(()=>window.__fetchOutcome='blocked');'started'"])!;
+                await startFetch;
+                await Task.Delay(300);
+                var blockedFetch = (Task<string>)core.GetType().GetMethod("ExecuteScriptAsync")!
+                    .Invoke(core, ["window.__fetchOutcome"])!;
+                Check(JsonSerializer.Deserialize<string>(await blockedFetch) == "blocked",
+                    "16a animation script cannot fetch an external resource");
+                var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(panel);
+                int x = (int)Math.Round(panel.Left * dpi.DpiScaleX);
+                int y = (int)Math.Round(panel.Top * dpi.DpiScaleY);
+                int width = (int)Math.Round(panel.ActualWidth * dpi.DpiScaleX);
+                int height = (int)Math.Round(panel.ActualHeight * dpi.DpiScaleY);
+                using var image = new Bitmap(width, height);
+                using (Graphics graphics = Graphics.FromImage(image))
+                    graphics.CopyFromScreen(x, y, 0, 0, image.Size);
+                string screenshot = Path.Combine("dist", "visualization-smoke.png");
+                image.Save(screenshot, ImageFormat.Png);
+                Console.WriteLine("VISUALIZATION_SCREENSHOT " + Path.GetFullPath(screenshot));
+            }
+            catch (Exception exception) { visualFailure = exception; }
+            finally
+            {
+                panel?.Close();
+                timeout.Stop();
+                Dispatcher.ExitAllFrames();
+                app.Shutdown();
+            }
+        }));
+        Dispatcher.Run();
+    });
+    visualThread.SetApartmentState(ApartmentState.STA);
+    visualThread.Start();
+    if (!visualThread.Join(TimeSpan.FromSeconds(35)))
+        throw new TimeoutException("Visualization UI thread did not stop");
+    if (visualFailure is not null) throw visualFailure;
 }
 
 if (args.Contains("--live-smoke"))
@@ -1129,9 +1350,11 @@ sealed class MockQuickAgentToolHandler : HttpMessageHandler
         using JsonDocument body = JsonDocument.Parse(await request.Content!
             .ReadAsStringAsync(cancellationToken));
         JsonElement root = body.RootElement;
-        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 17 &&
+        SawQuickTools = root.GetProperty("tools").GetArrayLength() == 19 &&
             root.GetProperty("tools").EnumerateArray().Any(item =>
-                item.GetProperty("function").GetProperty("name").GetString() == "create_text_file");
+                item.GetProperty("function").GetProperty("name").GetString() == "create_text_file") &&
+            root.GetProperty("tools").EnumerateArray().Any(item =>
+                item.GetProperty("function").GetProperty("name").GetString() == "show_visualization");
         JsonElement messages = root.GetProperty("messages");
         int call = ++_calls;
         if (call == 3)

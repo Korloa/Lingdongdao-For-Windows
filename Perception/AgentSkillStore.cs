@@ -70,7 +70,8 @@ public sealed class AgentSkillStore
         string label = decision.Kind is AgentToolKind.TypeText or AgentToolKind.Click or
             AgentToolKind.RightClick or AgentToolKind.DoubleClick or AgentToolKind.Drag or
             AgentToolKind.CreateFolder or AgentToolKind.CreateTextFile or
-            AgentToolKind.OpenCreatedFile
+            AgentToolKind.OpenCreatedFile or AgentToolKind.ShowVisualization or
+            AgentToolKind.CloseVisualization
             ? decision.Kind.ToString() : decision.Label[..Math.Min(48, decision.Label.Length)];
         return decision.Kind is AgentToolKind.Wait or AgentToolKind.Finish or
             AgentToolKind.ScheduleWake or AgentToolKind.Rejected

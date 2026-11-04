@@ -1,5 +1,10 @@
 # Third-party notices
 
+The on-demand HTML animation panel uses Microsoft.Web.WebView2 1.0.4314.35.
+Its SDK license and third-party notices are included in
+`third_party/webview2/LICENSE.txt` and `third_party/webview2/NOTICE.txt`.
+The Microsoft Edge WebView2 Runtime is installed separately on Windows.
+
 Optional desktop perception uses RapidOCR (Apache-2.0 model derivatives and
 project license; see https://rapidai.github.io/RapidOCRDocs/main/en/model_licenses/),
 ONNX Runtime (MIT; https://github.com/microsoft/onnxruntime), and an optional

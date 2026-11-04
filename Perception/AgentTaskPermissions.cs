@@ -11,23 +11,26 @@ public static partial class AgentTaskPermissions
     [GeneratedRegex(@"发送|回复|^send$|^reply$", RegexOptions.IgnoreCase)]
     private static partial Regex SendControl();
 
-    [GeneratedRegex(@"创建|新建|写入|编写|保存|生成|制作|做一个|create|write|save|build",
+    [GeneratedRegex(@"(?:创建|新建|写入|编写|保存|生成|制作|做一个|create|write|save|build).{0,28}(?:文件|文件夹|目录|网页|网站|页面|代码|folder|file|web ?page|code|[\p{L}\p{N}_-]+\.html?)",
         RegexOptions.IgnoreCase)]
-    private static partial Regex FileActionVerb();
+    private static partial Regex ExplicitFileCreation();
 
-    [GeneratedRegex(@"文件|文件夹|目录|网页|网站|页面|代码|html|css|javascript|markdown|folder|file|web ?page|code",
+    [GeneratedRegex(@"(?:不要|不需要|无需|禁止|别)[^，,。；;\r\n]*",
         RegexOptions.IgnoreCase)]
-    private static partial Regex FileActionObject();
+    private static partial Regex NegativeClause();
+
+    private static string PositiveGoal(string goal) => NegativeClause().Replace(goal, "");
 
     public static bool MayCreateFiles(string goal) =>
-        FileActionVerb().IsMatch(goal) && FileActionObject().IsMatch(goal);
+        ExplicitFileCreation().IsMatch(PositiveGoal(goal));
 
-    [GeneratedRegex(@"浏览器|chrome|edge|browser", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:用|在|通过).{0,12}(?:浏览器|chrome|edge|browser)|(?:浏览器|chrome|edge|browser).{0,12}(?:打开|预览|显示|open|preview)",
+        RegexOptions.IgnoreCase)]
     private static partial Regex BrowserPreview();
 
     public static bool RequiresBrowserPreview(string goal) =>
-        MayCreateFiles(goal) && BrowserPreview().IsMatch(goal) &&
-        goal.Contains("html", StringComparison.OrdinalIgnoreCase);
+        MayCreateFiles(goal) && BrowserPreview().IsMatch(PositiveGoal(goal)) &&
+        PositiveGoal(goal).Contains("html", StringComparison.OrdinalIgnoreCase);
 
     [GeneratedRegex(@"VS\s*Code|Visual Studio Code", RegexOptions.IgnoreCase)]
     private static partial Regex VsCodeRequest();
@@ -36,10 +39,17 @@ public static partial class AgentTaskPermissions
     private static partial Regex ExplorerRequest();
 
     public static bool RequiresVsCodeFile(string goal) =>
-        MayCreateFiles(goal) && VsCodeRequest().IsMatch(goal);
+        MayCreateFiles(goal) && VsCodeRequest().IsMatch(PositiveGoal(goal));
 
     public static bool RequiresExplorerFile(string goal) =>
-        MayCreateFiles(goal) && ExplorerRequest().IsMatch(goal);
+        MayCreateFiles(goal) && ExplorerRequest().IsMatch(PositiveGoal(goal));
+
+    [GeneratedRegex(@"可视化|动画(?:展示|演示)|(?:展示|演示).{0,30}动画|visualiz|animated? demo",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex VisualizationRequest();
+
+    public static bool RequiresVisualization(string goal) =>
+        VisualizationRequest().IsMatch(goal);
 
     [GeneratedRegex(@"(?<![\p{L}\p{N}_-])[\p{L}\p{N}_-]+\.html?\b",
         RegexOptions.IgnoreCase)]

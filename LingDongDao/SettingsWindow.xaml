@@ -489,6 +489,8 @@
                                    Foreground="#9CB0BB" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
                         <local:SettingSlider x:Name="QuickAgentMaxActionsSlider" Label="全桌面 Agent 最多操作步数" Unit="步"
                                               Minimum="1" Maximum="40" Step="1" Decimals="0"/>
+                        <CheckBox x:Name="AgentVisualizationCheck" Content="允许 Agent 显示 HTML 动画面板"
+                                  Margin="0,8,0,0"/>
                         <TextBlock Text="蓝色光标" Foreground="#8DD7EC" FontSize="12" Margin="0,14,0,7"/>
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="135"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

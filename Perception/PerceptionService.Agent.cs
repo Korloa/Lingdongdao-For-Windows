@@ -10,6 +10,9 @@ public sealed partial class PerceptionService
     private int _agentActions, _agentCalls;
 
     public event Action<AgentActionVisual>? AgentVisual;
+    public event Func<AgentVisualizationRequest, CancellationToken,
+        Task<AgentVisualizationResult>>? AgentVisualizationRequested;
+    public event Func<CancellationToken, Task<AgentVisualizationResult>>? AgentVisualizationCloseRequested;
     public event Action? AgentBeforeCapture;
     public event Action? AgentAfterCapture;
     public event Action<AgentLoopOutcome>? AgentCompleted;
@@ -135,6 +138,7 @@ public sealed partial class PerceptionService
         private readonly HashSet<string> _openedBrowserPaths = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _openedVsCodePaths = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _openedExplorerPaths = new(StringComparer.OrdinalIgnoreCase);
+        private bool _visualizationShown;
         private bool _typedInMessageApp;
 
         public LiveAgentEnvironment(PerceptionService service, string goal, bool quickMode,
@@ -163,7 +167,9 @@ public sealed partial class PerceptionService
                     _processId = window!.ProcessId;
                 _expectedProcessName = null;
             }
-            if (window is null || window.ProcessId == Environment.ProcessId)
+            bool ownVisualization = _quickMode && window?.ProcessId == Environment.ProcessId &&
+                window.Title.StartsWith("灵动岛可视化", StringComparison.Ordinal);
+            if (window is null || window.ProcessId == Environment.ProcessId && !ownVisualization)
                 throw new InvalidOperationException("请将目标软件保持在前台");
             if (_processId == 0) _processId = window.ProcessId;
             else if (!_quickMode && window.ProcessId != _processId)
@@ -242,6 +248,10 @@ public sealed partial class PerceptionService
                 AgentToolDecision decision = await _service._cloud.NextAgentToolAsync(
                     _conversation, frame, _goal, history, cancellationToken, _quickMode);
                 if (_quickMode && decision.Kind == AgentToolKind.Finish && decision.Success &&
+                    AgentTaskPermissions.RequiresVisualization(_goal) && !_visualizationShown)
+                    decision = decision with { Kind = AgentToolKind.Rejected,
+                        Value = "任务要求可视化展示，请先调用 show_visualization 并查看新截图" };
+                if (_quickMode && decision.Kind == AgentToolKind.Finish && decision.Success &&
                     AgentTaskPermissions.MayCreateFiles(_goal))
                 {
                     bool createdHtml = _createdPaths.Any(path =>
@@ -301,6 +311,37 @@ public sealed partial class PerceptionService
                     $"未执行：{decision.Value}。请改用已列出的快捷键或文件工具，勿重复相同参数");
                 _conversation.AddToolResult(decision, rejected);
                 return rejected;
+            }
+            if (_quickMode && decision.Kind is AgentToolKind.ShowVisualization or
+                AgentToolKind.CloseVisualization)
+            {
+                AgentVisualizationResult render;
+                if (decision.Kind == AgentToolKind.ShowVisualization)
+                {
+                    AgentVisualizationRequest request = System.Text.Json.JsonSerializer
+                        .Deserialize<AgentVisualizationRequest>(decision.Value ?? "{}")!;
+                    var handler = _service.AgentVisualizationRequested;
+                    render = !_service._options().AgentVisualizationEnabled ?
+                        new(false, "设置中已关闭 Agent 动画面板") :
+                        handler is null ? new(false, "可视化窗口尚未接入") :
+                        await handler(request, cancellationToken);
+                }
+                else
+                {
+                    var handler = _service.AgentVisualizationCloseRequested;
+                    render = handler is null ? new(false, "可视化窗口尚未接入") :
+                        await handler(cancellationToken);
+                }
+                if (render.Shown)
+                {
+                    _service._agentActions++;
+                    if (decision.Kind == AgentToolKind.ShowVisualization)
+                        _visualizationShown = true;
+                }
+                var result = new AgentActionFeedback(decision, render.Shown, render.Detail);
+                _conversation.AddToolResult(decision, result);
+                if (render.Shown) await Task.Delay(350, cancellationToken);
+                return result;
             }
             if (_quickMode && decision.Kind is AgentToolKind.CreateFolder or
                 AgentToolKind.CreateTextFile or AgentToolKind.OpenCreatedFile)

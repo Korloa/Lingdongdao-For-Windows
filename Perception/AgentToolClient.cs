@@ -30,6 +30,12 @@ public sealed class AgentConversation
               "Do not create the same file twice after a prior create_text_file success; use its existing path with open_created_file. " +
               "For GUI-only creation, Ctrl+N, Ctrl+Shift+S and Ctrl+Shift+N are supported; type_text accepts multiline code. " +
               "If no destination was specified, use the user's Desktop folder and say where you saved the result. " +
+              "When a visual explanation or animated demonstration would help the user's task, use show_visualization with an HTML fragment, CSS, and JavaScript. " +
+              "The visualization appears in a centered desktop panel; after showing it you receive a fresh screenshot to verify. " +
+              "If the user explicitly asks for visualization or animation, do not finish successfully before showing it. " +
+              "Use the built-in visual.animate, visual.stagger, visual.count, and visual.sleep helpers if useful. " +
+              "Keep visualization self-contained, readable, and focused on the user's request. No external libraries, URLs, forms, or secrets. " +
+              "The panel stays visible until the user closes it or you call close_visualization. " +
               "Only send messages or submit forms when the user's task explicitly asks you to do so. " +
               "For a delay longer than 5 seconds, use schedule_wake once and end this run; the app will resume you at the due time with a fresh screenshot. "
             : "You operate one Windows application. Call only click, right_click, or finish. ";
@@ -200,7 +206,26 @@ public sealed partial class ConfigurableCloudAgent
               app = new { type = "string", @enum = new[] { "vscode", "chrome", "edge", "explorer" } },
               label = new { type = "string" } },
               required = new[] { "path", "app", "label" },
-              additionalProperties = false } } }
+              additionalProperties = false } } },
+        new { type = "function", function = new { name = "show_visualization",
+            description = "Display a self-contained HTML/CSS/JS animation in a centered borderless desktop panel. Use for a visual explanation or demonstration. No external assets or network access. The next screenshot shows the panel.",
+            parameters = new { type = "object", properties = new
+            {
+                title = new { type = "string", description = "Short Chinese panel title" },
+                html = new { type = "string", description = "HTML body fragment only; no script/style/link/iframe" },
+                css = new { type = "string", description = "Inline CSS and keyframe animations" },
+                javascript = new { type = "string", description = "Inline JavaScript animation; visual helpers available" },
+                width = new { type = "integer", description = "Panel width in DIP, 480-1200; default 820" },
+                height = new { type = "integer", description = "Panel height in DIP, 320-760; default 520" },
+                duration_seconds = new { type = "integer", description = "Auto close after 1-300 seconds, or 0 to keep open" },
+                label = new { type = "string", description = "Short Chinese action label" }
+            }, required = new[] { "title", "html", "css", "javascript", "label" },
+               additionalProperties = false } } },
+        new { type = "function", function = new { name = "close_visualization",
+            description = "Close the currently displayed animation panel, when the demonstration is finished.",
+            parameters = new { type = "object", properties = new
+            { label = new { type = "string" } }, required = new[] { "label" },
+            additionalProperties = false } } }
     ];
 
     public async Task<AgentToolDecision> NextAgentToolAsync(AgentConversation conversation,
@@ -215,7 +240,7 @@ public sealed partial class ConfigurableCloudAgent
         {
             ["model"] = _model!, ["messages"] = conversation.Messages,
             ["tools"] = quickMode ? QuickAgentTools : AgentTools,
-            ["tool_choice"] = "required", ["max_tokens"] = quickMode ? 4096 : 450
+            ["tool_choice"] = "required", ["max_tokens"] = quickMode ? 8192 : 450
         };
         if (Uri.TryCreate(_endpoint, UriKind.Absolute, out Uri? uri) &&
             uri.Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase))
@@ -266,6 +291,31 @@ public sealed partial class ConfigurableCloudAgent
             if (wakeLabel.Length > 48) wakeLabel = wakeLabel[..48];
             return new AgentToolDecision(id, AgentToolKind.ScheduleWake, 0, 0,
                 wakeLabel, false, "", raw, $"{seconds}|{context}");
+        }
+        if (name == "show_visualization")
+        {
+            var request = new AgentVisualizationRequest(
+                (input.GetProperty("title").GetString() ?? "").Trim(),
+                input.GetProperty("html").GetString() ?? "",
+                input.GetProperty("css").GetString() ?? "",
+                input.GetProperty("javascript").GetString() ?? "",
+                input.TryGetProperty("width", out JsonElement width) ? width.GetInt32() : 820,
+                input.TryGetProperty("height", out JsonElement height) ? height.GetInt32() : 520,
+                input.TryGetProperty("duration_seconds", out JsonElement duration) ?
+                    duration.GetInt32() : 0);
+            if (!AgentVisualizationDocument.TryValidate(request, out string reason))
+                throw new InvalidDataException(reason);
+            string visualLabel = (input.GetProperty("label").GetString() ?? "展示动画").Trim();
+            if (visualLabel.Length > 48) visualLabel = visualLabel[..48];
+            return new AgentToolDecision(id, AgentToolKind.ShowVisualization, 0, 0,
+                visualLabel, false, "", raw, JsonSerializer.Serialize(request));
+        }
+        if (name == "close_visualization")
+        {
+            string closeLabel = (input.GetProperty("label").GetString() ?? "关闭动画").Trim();
+            if (closeLabel.Length > 48) closeLabel = closeLabel[..48];
+            return new AgentToolDecision(id, AgentToolKind.CloseVisualization, 0, 0,
+                closeLabel, false, "", raw);
         }
         if (name == "open_browser")
         {

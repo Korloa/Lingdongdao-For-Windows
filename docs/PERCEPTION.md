@@ -121,6 +121,8 @@ v0.10.1 将定时器启动延迟到主窗口 `Loaded` 后，确保重启时已�
 
 v0.11.0 增加 `create_folder`、`create_text_file` 和 `open_created_file` 三个全桌面 Agent 工具。创建文件只接受绝对本地路径和 HTML/CSS/JS/JSON/TXT/Markdown 文本，不覆盖现有内容；打开工具只接受本轮新建的路径。任务中明确写出的 HTML 文件名会被保留。VS Code、资源管理器和 Chrome 的新文件流程都经过真实桌面及云端循环测试，截图会在每步之后重新采集。浏览器预览任务只有本轮新建的指定文件已打开且浏览器位于前台时才能成功结束；模型错误工具参数会作为可恢复反馈进入下一轮。复杂任务的实际成功率仍取决于屏幕状态、云端模型和 Windows 焦点状态，UAC 交互尚未实测。
 
+v0.12.0 增加按需加载的 `show_visualization` 与 `close_visualization` 工具。云端可提交 HTML 片段、CSS、JS、标题和面板大小；`AgentVisualizationDocument` 校验大小、禁止嵌套页面和外链标签，并拼装带 CSP 的内存文档。WPF 中央无边框面板用 WebView2 渲染，可用右上角或 Esc 关闭；Agent 的下一轮整桌面截图包含面板，供模型核对。WebView2 禁用宿主对象、网页消息、权限、下载、弹窗和外部导航，并拒绝网络资源请求；本机实测外部 `fetch` 被阻止。面板默认保持显示，也可设置 1～300 秒自动关闭。设置中可独立关闭 Agent 动画面板。`--visualization-smoke` 验证本地 HTML/JS 渲染与外部请求拦截；`--visualization-tool-smoke` 用合成截图验证真实云端函数调用；`--live-visualization-agent` 已完成实际云端调用、面板渲染、新截图回传与成功判断。此功能依赖单独安装的 Microsoft Edge WebView2 Runtime，未安装时面板会提示原因。
+
 2026-10-31 本机短测：RapidOCR 热推理约 0.32～0.35 秒、进程峰值约 145～146 MB；320×320 GUI ONNX 热推理约 0.09～0.13 秒、进程峰值约 225 MB。12 秒真实增强模式采样中主进程约 82 MB、两个 Python 模型进程合计约 335～368 MB，总计约 **417～450 MB**。这不是长期峰值保证，CPU、内存随分辨率、显示器数、窗口内容和模型而变化。640×640 GUI ONNX 曾测约 441 MB，故默认选择 320×320。资源脚本输出单核相对 CPU 百分比和工作集；面板的 CPU 百分比按整机逻辑处理器数归一化。
 
 独立 WPF 界面烟测已验证新版 EXE 能启动，并能通过 Ctrl+Alt+D 打开感知设置面板；测试后已恢复原安装版进程。该界面进程本身曾观察到约 214 MB 工作集（当时感知关闭），因此启用增强模式后整款应用可能超过 500 MB；上面的 417～450 MB 是感知测试宿主与模型进程合计值，不代表完整灵动岛的内存上限。
@@ -133,7 +135,8 @@ v0.11.0 增加 `create_folder`、`create_text_file` 和 `open_created_file` 三�
 | `Perception/ScreenCapture.cs`, `ChangeDetector.cs`, `WindowsActivity.cs`, `UiAutomationReader.cs` | 采集和初筛 |
 | `Perception/ObservationFusion.cs`, `StateMemory.cs`, `RuleClassifier.cs` | 空间关联、短期记忆和可解释规则 |
 | `Perception/CloudCallHistory.cs`, `LingDongDao/CloudHistoryWindow.xaml` | 本机加密调用记录及截图、完整回复查看 |
-| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentFileTool.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `DesktopAppTool.cs`, `DesktopWindowTool.cs`, `DesktopWindowInventory.cs`, `PerceptionService.Agent.cs` | 全桌面 Agent 循环、文件创建与预览、输入工具、软件与窗口切换、受限网址输入和运行控制 |
+| `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentFileTool.cs`, `AgentVisualization.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `DesktopAppTool.cs`, `DesktopWindowTool.cs`, `DesktopWindowInventory.cs`, `PerceptionService.Agent.cs` | 全桌面 Agent 循环、文件创建、HTML 动画文档与工具校验、输入工具、软件与窗口切换、受限网址输入和运行控制 |
+| `LingDongDao/AgentVisualizationWindow.cs` | WebView2 中央动画面板、关闭与页面资源隔离 |
 | `Perception/AgentSkillStore.cs`, `AgentWakeScheduler.cs` | 加密的成功步骤经验和单次计时唤醒 |
 | `LingDongDao/AgentActionOverlay.cs`, `AgentGhostCursorOverlay.cs`, `AgentCommandWindow.cs` | 点击坐标浮层、蓝色光标和快捷指令输入框 |
 | `LingDongDao/PerceptionDebugOverlay.cs` | OCR/GUI 识别框与坐标调试浮层，Windows 截图排除 |

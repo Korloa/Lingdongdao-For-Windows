@@ -3,7 +3,7 @@ namespace LingDongDao.Perception;
 public enum AgentToolKind
 { Click, RightClick, Finish, OpenBrowser, Navigate, DoubleClick, Scroll, TypeText, PressKeys, Wait, Drag,
   OpenApp, ActivateWindow, ScheduleWake, CreateFolder, CreateTextFile,
-  OpenCreatedFile, Rejected }
+  OpenCreatedFile, ShowVisualization, CloseVisualization, Rejected }
 
 public sealed record AgentToolDecision(string CallId, AgentToolKind Kind, int X, int Y,
     string Label, bool Success, string Summary, string RawResponse, string? Value = null,
@@ -59,6 +59,7 @@ public sealed class AgentLoopEngine
                 AgentToolKind.ActivateWindow or AgentToolKind.TypeText or
                 AgentToolKind.PressKeys or AgentToolKind.Wait or AgentToolKind.CreateFolder or
                 AgentToolKind.CreateTextFile or AgentToolKind.OpenCreatedFile or
+                AgentToolKind.ShowVisualization or AgentToolKind.CloseVisualization or
                 AgentToolKind.Rejected
                 ? $"第 {round + 1} 步：{decision.Label}"
                 : $"第 {round + 1} 步：{decision.Label} ({decision.X}, {decision.Y})");

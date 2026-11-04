@@ -58,6 +58,7 @@ public partial class SettingsWindow : Window
         AgentMaxActionsSlider.SetCurrentValue(SettingSlider.ValueProperty, (double)options.AgentMaxActions);
         QuickAgentMaxActionsSlider.SetCurrentValue(SettingSlider.ValueProperty,
             (double)options.QuickAgentMaxActions);
+        AgentVisualizationCheck.IsChecked = options.AgentVisualizationEnabled;
         AgentCursorColorBox.Text = options.AgentCursorColor;
         AgentCursorShapeChoice.SelectedIndex = options.AgentCursorShape switch
             { "slim" => 1, "diamond" => 2, _ => 0 };
@@ -335,6 +336,7 @@ public partial class SettingsWindow : Window
         _working.Perception.EscalationThreshold = PerceptionThresholdSlider.Value;
         _working.Perception.AgentMaxActions = (int)AgentMaxActionsSlider.Value;
         _working.Perception.QuickAgentMaxActions = (int)QuickAgentMaxActionsSlider.Value;
+        _working.Perception.AgentVisualizationEnabled = AgentVisualizationCheck.IsChecked == true;
         string color = AgentCursorColorBox.Text.Trim();
         if (color.Length != 7 || color[0] != '#' || !color[1..].All(Uri.IsHexDigit))
         { ErrorText.Text = "光标颜色请输入 #RRGGBB。"; return; }

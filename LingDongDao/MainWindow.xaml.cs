@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     private AgentActionOverlay? _agentOverlay;
     private AgentGhostCursorOverlay? _ghostCursor;
     private AgentCommandWindow? _agentCommandWindow;
+    private AgentVisualizationWindow? _visualizationWindow;
     private bool _quickAgentActive;
     private PerceptionDebugOverlay? _debugOverlay;
     private readonly DispatcherTimer _closeTimer = new() { Interval = TimeSpan.FromSeconds(3.5) };
@@ -117,6 +118,12 @@ public partial class MainWindow : Window
             if (!Dispatcher.HasShutdownStarted)
                 Dispatcher.Invoke(() => ShowAgentVisual(cue));
         };
+        _perception.AgentVisualizationRequested += (request, token) =>
+            Dispatcher.InvokeAsync(() => ShowAgentVisualizationAsync(request, token))
+                .Task.Unwrap();
+        _perception.AgentVisualizationCloseRequested += token =>
+            Dispatcher.InvokeAsync(() => CloseAgentVisualizationAsync(token))
+                .Task.Unwrap();
         _perception.AgentClicked += cue =>
         {
             if (!Dispatcher.HasShutdownStarted)
@@ -164,6 +171,7 @@ public partial class MainWindow : Window
                         _ghostCursor?.Stop();
                         _quickAgentActive = false;
                     }
+                    if (!outcome.Success) _visualizationWindow?.Close();
                     string detail = string.IsNullOrWhiteSpace(outcome.Summary)
                         ? outcome.Status : outcome.Summary;
                     if (detail.Length > 66) detail = detail[..65] + "…";
@@ -315,6 +323,32 @@ public partial class MainWindow : Window
         if (!cue.Visible) { _agentOverlay?.HideAction(); return; }
         _agentOverlay ??= new AgentActionOverlay();
         _agentOverlay.ShowAction(cue);
+    }
+
+    private async Task<AgentVisualizationResult> ShowAgentVisualizationAsync(
+        AgentVisualizationRequest request, CancellationToken cancellationToken)
+    {
+        if (_visualizationWindow is null)
+        {
+            var created = new AgentVisualizationWindow();
+            _visualizationWindow = created;
+            created.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_visualizationWindow, created)) _visualizationWindow = null;
+            };
+        }
+        AgentVisualizationWindow panel = _visualizationWindow;
+        return await panel.ShowContentAsync(request, cancellationToken);
+    }
+
+    private Task<AgentVisualizationResult> CloseAgentVisualizationAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_visualizationWindow is null)
+            return Task.FromResult(new AgentVisualizationResult(false, "当前没有动画面板"));
+        _visualizationWindow.Close();
+        return Task.FromResult(new AgentVisualizationResult(true, "动画面板已关闭"));
     }
 
     private void OpenAgentCommand()
@@ -1791,6 +1825,7 @@ public partial class MainWindow : Window
         _hotkeySource?.RemoveHook(HotkeyWndProc);
         _settingsWindow?.Close();
         _agentOverlay?.Close();
+        _visualizationWindow?.Close();
         _debugOverlay?.Close();
         _clipboardMonitor.Dispose();
         _statusMonitor.Dispose();
