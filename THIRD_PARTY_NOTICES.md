@@ -45,6 +45,8 @@ https://github.com/Enkianssus/AwooMusicBot/tree/main/experiments/kugou-control-p
 Audio session inspection uses NAudio.Wasapi 3.3.0:
 https://github.com/naudio/NAudio
 
+Offline microphone capture also uses NAudio.WinMM 3.3.0 under the same MIT license.
+
 Copyright 2008-2026 Mark Heath
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -64,3 +66,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Offline recognition uses Vosk 0.3.38 and vosk-model-small-cn-0.22 under Apache License 2.0.
+Upstream: https://github.com/alphacep/vosk-api and https://alphacephei.com/vosk/models
+The complete Apache 2.0 text is included in third_party/vosk/LICENSE.txt.

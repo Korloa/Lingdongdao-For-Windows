@@ -129,6 +129,14 @@ v0.12.0 增加按需加载的 `show_visualization` 与 `close_visualization` 工
 
 ## 接口与代码位置
 
+### 离线语音输入与指针同步
+
+召唤 Agent 后，点击麦克风或按 Ctrl+M 开始录音；再次操作或到 20 秒时停止。在 UI 线程以 16 kHz、16 位、单声道 PCM 采集，仅在内存中暂存，后台加载 `models/vosk-model-small-cn-0.22` 识别，结束后释放模型。识别结果进入任务输入框，用户可修改后按 Enter 执行。这里的语音识别不调用云端；后续执行 Agent 任务仍遵守截图授权和预算门控。源码构建时先运行 `scripts/setup-voice-model.ps1`。安装版和便携版随包带模型。官方模型页列出的中文小模型约 42 MB，运行内存约 300 MB；此资源消耗只在识别期间出现，不计入常驻感知服务的内存目标。
+
+`AgentMotionRequested` 将点击流程与蓝色指针的 `MoveToAsync` 完成事件连接；界面线程卡住后每帧进度最多 0.09，避免下一帧跳到终点。Windows 的 `SendInput` 仍需临时将系统指针移到目标；快速 Agent 在注入时隐藏系统指针并在目标未被用户改动时恢复原位置。真实鼠标与蓝色指针是两个可视对象，但 Windows 本身只支持一个系统输入指针。
+
+`dotnet run --project PerceptionTests -c Release -- --voice-self-test` 用内存中的 1 秒静音 PCM 验证模型可加载并返回空文本；`--voice-mic-test` 录制 1.2 秒并仅打印识别字符数，不保存音频或文本。`--settings-smoke` 包括 UI 光标停顿回归测试。当前尚未由真人口述中文命令验证识别准确率；识别结果须人工核对。Vosk 官方给该中文小模型报告的语料错误率较高，复杂口音、软件名和英文词可能识别错误。
+
 | 位置 | 职责 |
 | --- | --- |
 | `Perception/Contracts.cs` | `DesktopObservation`、截图/窗口/GUI/OCR/事件/评分结构，`IOcrEngine`、`IGuiDetector`、`ILocalClassifier`、`ICloudAgent` |
@@ -138,7 +146,7 @@ v0.12.0 增加按需加载的 `show_visualization` 与 `close_visualization` 工
 | `Perception/AgentLoop.cs`, `AgentToolClient.cs`, `AgentFileTool.cs`, `AgentVisualization.cs`, `AgentMouseTool.cs`, `AgentBrowserTool.cs`, `AgentKeyboardTool.cs`, `DesktopAppTool.cs`, `DesktopWindowTool.cs`, `DesktopWindowInventory.cs`, `PerceptionService.Agent.cs` | 全桌面 Agent 循环、文件创建、HTML 动画文档与工具校验、输入工具、软件与窗口切换、受限网址输入和运行控制 |
 | `LingDongDao/AgentVisualizationWindow.cs` | WebView2 中央动画面板、关闭与页面资源隔离 |
 | `Perception/AgentSkillStore.cs`, `AgentWakeScheduler.cs` | 加密的成功步骤经验和单次计时唤醒 |
-| `LingDongDao/AgentActionOverlay.cs`, `AgentGhostCursorOverlay.cs`, `AgentCommandWindow.cs` | 点击坐标浮层、蓝色光标和快捷指令输入框 |
+| `LingDongDao/AgentActionOverlay.cs`, `AgentGhostCursorOverlay.cs`, `AgentCommandWindow.cs`, `OfflineVoiceInput.cs` | 点击坐标浮层、逐帧蓝色光标、快捷指令输入框和离线麦克风识别 |
 | `LingDongDao/PerceptionDebugOverlay.cs` | OCR/GUI 识别框与坐标调试浮层，Windows 截图排除 |
 | `LingDongDao/CurrentWeather.cs` | 当前温度、WMO 天气代码及更新时间解析 |
 | `Perception/PythonRuntime.cs` | 源码及测试目录向上寻找本地 Python 和 GUI ONNX 运行时 |

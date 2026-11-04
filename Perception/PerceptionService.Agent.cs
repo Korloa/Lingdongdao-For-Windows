@@ -10,6 +10,7 @@ public sealed partial class PerceptionService
     private int _agentActions, _agentCalls;
 
     public event Action<AgentActionVisual>? AgentVisual;
+    public event Func<AgentActionVisual, CancellationToken, Task>? AgentMotionRequested;
     public event Func<AgentVisualizationRequest, CancellationToken,
         Task<AgentVisualizationResult>>? AgentVisualizationRequested;
     public event Func<CancellationToken, Task<AgentVisualizationResult>>? AgentVisualizationCloseRequested;
@@ -479,13 +480,18 @@ public sealed partial class PerceptionService
                 {
                     if (target is not null)
                     {
-                        _service.AgentVisual?.Invoke(new AgentActionVisual(true,
+                        var cue = new AgentActionVisual(true,
                             AgentToolKind.ActivateWindow,
                             target.Bounds.X + Math.Min(100, target.Bounds.Width / 2),
                             target.Bounds.Y + Math.Min(24, target.Bounds.Height / 2),
-                            decision.Label));
-                        await Task.Delay(_service._options().AgentCursorMoveMs,
-                            cancellationToken);
+                            decision.Label);
+                        if (_service.AgentMotionRequested is { } move)
+                            await move(cue, cancellationToken);
+                        else
+                        {
+                            _service.AgentVisual?.Invoke(cue);
+                            await Task.Delay(_service._options().AgentCursorMoveMs, cancellationToken);
+                        }
                         executed = DesktopWindowTool.Activate(target);
                     }
                     else executed = DesktopAppTool.TryLaunch(decision.Value ?? "", out _);
@@ -573,13 +579,19 @@ public sealed partial class PerceptionService
                 _conversation.AddToolResult(decision, blocked);
                 return blocked;
             }
-            _service.AgentVisual?.Invoke(new AgentActionVisual(true, decision.Kind,
-                decision.X, decision.Y, decision.Label));
+            var actionCue = new AgentActionVisual(true, decision.Kind,
+                decision.X, decision.Y, decision.Label);
             try
             {
                 PerceptionOptions motion = _service._options();
-                await Task.Delay(_quickMode ? motion.AgentCursorMoveMs : 180,
-                    cancellationToken);
+                if (_quickMode && _service.AgentMotionRequested is { } move)
+                    await move(actionCue, cancellationToken);
+                else
+                {
+                    _service.AgentVisual?.Invoke(actionCue);
+                    await Task.Delay(_quickMode ? motion.AgentCursorMoveMs : 180,
+                        cancellationToken);
+                }
                 using var freshActivity = new WindowsActivity();
                 bool stillAllowed = _quickMode
                     ? AgentMouseTool.IsAllowedDesktop(frame, decision,

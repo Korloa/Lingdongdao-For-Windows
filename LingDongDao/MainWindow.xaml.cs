@@ -118,6 +118,14 @@ public partial class MainWindow : Window
             if (!Dispatcher.HasShutdownStarted)
                 Dispatcher.Invoke(() => ShowAgentVisual(cue));
         };
+        _perception.AgentMotionRequested += async (cue, token) =>
+        {
+            if (Dispatcher.HasShutdownStarted) return;
+            Task motion = await Dispatcher.InvokeAsync(() =>
+                _quickAgentActive && _ghostCursor is { } cursor
+                    ? cursor.MoveToAsync(cue, token) : Task.CompletedTask);
+            await motion.WaitAsync(token);
+        };
         _perception.AgentVisualizationRequested += (request, token) =>
             Dispatcher.InvokeAsync(() => ShowAgentVisualizationAsync(request, token))
                 .Task.Unwrap();

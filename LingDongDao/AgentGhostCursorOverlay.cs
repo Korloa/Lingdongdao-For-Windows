@@ -20,6 +20,8 @@ internal sealed class AgentGhostCursorOverlay : Window
 {
     private readonly DispatcherTimer _motion = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Stopwatch _clock = new();
+    private TaskCompletionSource? _moveCompletion;
+    private double _lastMotionProgress;
     private readonly TextBlock _label;
     private readonly Canvas _canvas;
     private readonly Path _pointer;
@@ -146,6 +148,8 @@ internal sealed class AgentGhostCursorOverlay : Window
     public void Start(int x, int y)
     {
         _motion.Stop();
+        _moveCompletion?.TrySetCanceled();
+        _moveCompletion = null;
         _x = _targetX = x;
         _y = _targetY = y;
         _label.Text = "AI";
@@ -155,6 +159,8 @@ internal sealed class AgentGhostCursorOverlay : Window
 
     public void MoveTo(AgentActionVisual cue)
     {
+        _moveCompletion?.TrySetCanceled();
+        _moveCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _label.Text = cue.Kind == AgentToolKind.Navigate
             ? $"访问网页 · {cue.X}, {cue.Y}"
             : $"{cue.Label} · {cue.X}, {cue.Y}";
@@ -163,17 +169,33 @@ internal sealed class AgentGhostCursorOverlay : Window
         _startY = _y;
         _targetX = cue.X;
         _targetY = cue.Y;
+        _lastMotionProgress = 0;
         _clock.Restart();
         _motion.Start();
     }
 
+    public Task MoveToAsync(AgentActionVisual cue, CancellationToken cancellationToken)
+    {
+        MoveTo(cue);
+        return _moveCompletion!.Task.WaitAsync(cancellationToken);
+    }
+
     public void HideForCapture() { _motion.Stop(); if (IsVisible) Hide(); }
     public void Resume() { if (!IsVisible) Show(); Place(); }
-    public void Stop() { _motion.Stop(); if (IsVisible) Hide(); }
+    public void Stop()
+    {
+        _motion.Stop();
+        _moveCompletion?.TrySetCanceled();
+        _moveCompletion = null;
+        if (IsVisible) Hide();
+    }
 
     private void Tick()
     {
-        double t = Math.Min(1, _clock.Elapsed.TotalMilliseconds / _durationMs);
+        // Limit distance per rendered frame: a busy UI thread must not skip the whole path.
+        double t = Math.Min(1, Math.Min(_clock.Elapsed.TotalMilliseconds / _durationMs,
+            _lastMotionProgress + 0.09));
+        _lastMotionProgress = t;
         double progress = _curve switch
         {
             "linear" => t,
@@ -194,7 +216,12 @@ internal sealed class AgentGhostCursorOverlay : Window
             }
         }
         Place();
-        if (t >= 1) _motion.Stop();
+        if (t >= 1)
+        {
+            _motion.Stop();
+            _moveCompletion?.TrySetResult();
+            _moveCompletion = null;
+        }
     }
 
     private void Place()

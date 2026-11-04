@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>LingDongDao</AssemblyName>
     <RootNamespace>LingDongDao</RootNamespace>
-    <Version>0.12.0</Version>
+    <Version>0.13.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <ApplicationIcon>..\assets\LingDongDao.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
@@ -17,6 +17,13 @@
     <ProjectReference Include="..\Perception\Perception.csproj" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
+    <PackageReference Include="NAudio.WinMM" Version="3.3.0" />
+    <PackageReference Include="Vosk" Version="0.3.38" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('..\models\vosk\vosk-model-small-cn-0.22\conf\model.conf')">
+    <Content Include="..\models\vosk\vosk-model-small-cn-0.22\**\*"
+             Link="models\vosk-model-small-cn-0.22\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

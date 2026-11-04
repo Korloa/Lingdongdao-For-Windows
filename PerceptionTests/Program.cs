@@ -36,6 +36,35 @@ if (args.LastOrDefault()?.EndsWith(".fake-ocr-worker", StringComparison.Ordinal)
     return;
 }
 
+if (args.Contains("--voice-self-test") || args.Contains("--voice-mic-test"))
+{
+    Type voiceType = typeof(LingDongDao.MainWindow).Assembly
+        .GetType("LingDongDao.OfflineVoiceInput", true)!;
+    string modelPath = (string)voiceType.GetProperty("ModelPath")!.GetValue(null)!;
+    if (!File.Exists(Path.Combine(modelPath, "conf", "model.conf")))
+        throw new FileNotFoundException("Offline voice model missing", modelPath);
+    if (args.Contains("--voice-mic-test"))
+    {
+        using var input = (IDisposable)Activator.CreateInstance(voiceType,
+            nonPublic: true)!;
+        voiceType.GetMethod("Start")!.Invoke(input, null);
+        await Task.Delay(1200);
+        var transcribed = (Task<string>)voiceType.GetMethod("StopAndTranscribeAsync")!
+            .Invoke(input, [CancellationToken.None])!;
+        string heard = await transcribed.WaitAsync(TimeSpan.FromSeconds(30));
+        Console.WriteLine($"VOICE_MIC_OK recognized_characters={heard.Length}");
+        return;
+    }
+    var watch = Stopwatch.StartNew();
+    string result = (string)voiceType.GetMethod("TranscribePcm",
+        BindingFlags.Static | BindingFlags.NonPublic)!
+        .Invoke(null, [new byte[32000]])!;
+    Console.WriteLine($"VOICE_MODEL_OK elapsed_ms={watch.ElapsedMilliseconds} " +
+        $"silence_result_length={result.Length}");
+    if (result.Length != 0) throw new Exception("Silence yielded unexpected text");
+    return;
+}
+
 static void Check(bool condition, string caseName)
 {
     if (!condition) throw new Exception("FAIL: " + caseName);
@@ -1002,10 +1031,27 @@ if (args.Contains("--settings-smoke"))
                 (ghostStyle.ToInt64() & 0x20) != 0 &&
                 ((System.Windows.Controls.Canvas)ghost.Content).Children.Count >= 8,
                 "14a blue agent cursor is visible and click-through");
+            ghostType.GetMethod("Start")!.Invoke(ghost, [300, 220]);
+            var awaitedMotion = (Task)ghostType.GetMethod("MoveToAsync")!.Invoke(ghost,
+                [new AgentActionVisual(true, AgentToolKind.Click, 1380, 850,
+                    "测试连续移动"), CancellationToken.None])!;
+            Thread.Sleep(700);
+            ghostType.GetMethod("Tick", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(ghost, null);
+            double firstX = (double)ghostType.GetField("_x",
+                BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(ghost)!;
+            Check(firstX > 300 && firstX < 500 && !awaitedMotion.IsCompleted,
+                "14a1 busy UI frame does not teleport cursor or click early");
+            for (int i = 0; i < 12; i++) ghostType.GetMethod("Tick",
+                BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(ghost, null);
+            Check(awaitedMotion.IsCompletedSuccessfully,
+                "14a2 action waits for blue cursor to reach the target");
             ghost.Close();
             Type promptType = assembly.GetType("LingDongDao.AgentCommandWindow", true)!;
             var prompt = (System.Windows.Window)Activator.CreateInstance(promptType, nonPublic: true)!;
-            Check(prompt.Title == "召唤 Agent" && prompt.Content is System.Windows.Controls.Border,
+            Check(prompt.Title == "召唤 Agent" && prompt.Content is System.Windows.Controls.Border &&
+                promptType.GetField("_microphoneButton", BindingFlags.Instance |
+                    BindingFlags.NonPublic)!.GetValue(prompt) is System.Windows.Controls.Button,
                 "14b quick agent command window loads");
             prompt.Show();
             var taskbarArea = System.Windows.Forms.Screen.FromPoint(

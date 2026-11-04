@@ -1,4 +1,4 @@
-#define AppVersion "0.12.0"
+#define AppVersion "0.13.0"
 #define AppName "灵动岛"
 
 [Setup]
@@ -35,12 +35,15 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: isreadme
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"
 Source: "..\third_party\webview2\LICENSE.txt"; DestDir: "{app}\third_party\webview2"
 Source: "..\third_party\webview2\NOTICE.txt"; DestDir: "{app}\third_party\webview2"
+Source: "..\third_party\vosk\LICENSE.txt"; DestDir: "{app}\third_party\vosk"
 Source: "..\docs\PERCEPTION.md"; DestDir: "{app}\docs"
 Source: "..\perception_py\ocr_worker.py"; DestDir: "{app}\perception_py"
 Source: "..\perception_py\gui_worker.py"; DestDir: "{app}\perception_py"
 Source: "..\perception_py\requirements.txt"; DestDir: "{app}\perception_py"
 Source: "..\scripts\setup-perception.ps1"; DestDir: "{app}\scripts"
 Source: "..\scripts\set-deepseek-key.ps1"; DestDir: "{app}\scripts"
+Source: "..\scripts\setup-voice-model.ps1"; DestDir: "{app}\scripts"
+Source: "..\dist\models\vosk-model-small-cn-0.22\*"; DestDir: "{app}\models\vosk-model-small-cn-0.22"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
 Name: "{group}\灵动岛"; Filename: "{app}\LingDongDao.exe"

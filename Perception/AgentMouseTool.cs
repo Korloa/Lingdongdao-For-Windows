@@ -58,6 +58,7 @@ public static class AgentMouseTool
             AgentToolKind.DoubleClick)) return false;
         NativePoint old = default;
         bool restore = preserveUserCursor && GetCursorPos(out old);
+        using var hidden = preserveUserCursor ? new CursorHideScope() : null;
         if (!SetCursorPos(action.X, action.Y)) return false;
         try
         {
@@ -87,6 +88,7 @@ public static class AgentMouseTool
     {
         NativePoint old = default;
         bool restore = preserveUserCursor && GetCursorPos(out old);
+        using var hidden = preserveUserCursor ? new CursorHideScope() : null;
         if (!SetCursorPos(x, y)) return false;
         try
         {
@@ -107,6 +109,7 @@ public static class AgentMouseTool
     {
         NativePoint old = default;
         bool restore = preserveUserCursor && GetCursorPos(out old);
+        using var hidden = preserveUserCursor ? new CursorHideScope() : null;
         if (!SetCursorPos(x, y)) return false;
         bool down = false;
         try
@@ -154,6 +157,27 @@ public static class AgentMouseTool
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint { public int X, Y; }
 
+    // SendInput targets the system pointer. Keep its brief relocation invisible;
+    // the separate blue cursor shows the movement and the original position is restored.
+    private sealed class CursorHideScope : IDisposable
+    {
+        private readonly int _decrements;
+
+        public CursorHideScope()
+        {
+            for (int i = 0; i < 16; i++)
+            {
+                _decrements++;
+                if (ShowCursor(false) < 0) break;
+            }
+        }
+
+        public void Dispose()
+        {
+            for (int i = 0; i < _decrements; i++) ShowCursor(true);
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct Input { public uint Type; public MouseInput Mouse; }
     [StructLayout(LayoutKind.Sequential)]
@@ -165,6 +189,8 @@ public static class AgentMouseTool
     }
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")]
+    private static extern int ShowCursor(bool show);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetCursorPos(out NativePoint point);
     [DllImport("user32.dll", SetLastError = true)]
